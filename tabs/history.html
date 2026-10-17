@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>直播记录 · 鱼播</title>
+  <link rel="stylesheet" href="secondary.css">
+  <link rel="stylesheet" href="nav.css">
+  <link rel="stylesheet" href="history.css">
+</head>
+<body>
+  <header class="top secondary-top">
+    <a class="brand" href="index.html"><span class="title">鱼播</span><span class="subtitle">直播记录</span></a>
+    <nav class="site-nav" aria-label="页面导航">
+      <a class="tool-button nav-link" href="index.html">关注列表</a>
+      <a class="tool-button nav-link active" href="history.html" aria-current="page">直播记录</a>
+      <a class="tool-button nav-link" href="shortcuts.html">快捷键</a>
+      <a class="tool-button nav-link" href="settings.html">设置</a>
+    </nav>
+    <button class="tool-button page-action" id="clear-history">清空记录</button>
+  </header>
+  <main class="secondary-shell">
+    <header class="page-heading">
+      <h1>最近开播记录</h1><p>只保存在本机，最多保留 100 条</p>
+    </header>
+    <section class="settings-card"><div id="history-list" class="history-list"><div class="empty-note">正在读取记录…</div></div></section>
+  </main>
+  <script src="history.js"></script>
+</body>
+</html>

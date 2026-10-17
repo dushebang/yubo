@@ -1,0 +1,7 @@
+.shortcut-list{display:grid;gap:8px}
+.shortcut-item{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:52px;padding:8px 11px;border:1px solid #edf1ef;border-radius:10px;background:#fff}
+.shortcut-item>div{display:flex;flex-direction:column;gap:3px;min-width:0}
+.shortcut-item strong{font-size:13px}
+.shortcut-item small{color:#829093;font-size:12px}
+.shortcut-item kbd{display:inline-flex;align-items:center;justify-content:center;min-width:36px;height:30px;padding:0 9px;border:1px solid #d8e4e3;border-bottom-width:2px;border-radius:7px;background:#f8fbfa;color:#30484b;font:600 13px ui-monospace,SFMono-Regular,Consolas,monospace}
+.shortcut-note{margin:14px 0 0;color:#829093;font-size:12px;line-height:1.6}

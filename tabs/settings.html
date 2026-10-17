@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>设置 · 鱼播</title>
+  <link rel="stylesheet" href="secondary.css">
+  <link rel="stylesheet" href="platform-settings.css">
+  <link rel="stylesheet" href="settings-enhancements.css">
+  <link rel="stylesheet" href="nav.css">
+</head>
+<body>
+  <header class="top secondary-top">
+    <a class="brand" href="index.html"><span class="title">鱼播</span><span class="subtitle">设置</span></a>
+    <nav class="site-nav" aria-label="页面导航">
+      <a class="tool-button nav-link" href="index.html">关注列表</a>
+      <a class="tool-button nav-link" href="history.html">直播记录</a>
+      <a class="tool-button nav-link" href="shortcuts.html">快捷键</a>
+      <a class="tool-button nav-link active" href="settings.html" aria-current="page">设置</a>
+    </nav>
+  </header>
+  <main class="secondary-shell">
+    <header class="page-heading">
+      <h1>鱼播设置</h1><p>提醒、收藏管理和数据诊断</p>
+    </header>
+    <section class="settings-card">
+      <div class="section-title"><h2>开播提醒</h2><span>只影响通知，不影响关注列表</span></div>
+      <div class="form-grid reminder-settings-grid">
+        <label>提醒对象<select id="notify-mode"><option value="all">所有关注主播</option><option value="favorites">仅收藏主播</option><option value="none">关闭开播提醒</option></select></label>
+        <label>检查间隔（分钟）<input id="refresh-minutes" type="number" min="1" max="60"></label>
+        <div class="check-options-row">
+          <label class="check-line"><input id="group-notifications" type="checkbox">多人同时开播时合并通知</label>
+          <label class="check-line"><input id="mute-all" type="checkbox">暂时关闭全部通知</label>
+        </div>
+        <label class="check-line quiet-enabled"><input id="quiet-enabled" type="checkbox">启用免打扰时段</label>
+        <div class="quiet-hours-row">
+          <label>免打扰开始<input id="quiet-start" type="time"></label>
+          <label>结束<input id="quiet-end" type="time"></label>
+        </div>
+      </div>
+      <div class="group-notify-panel">
+        <div class="group-notify-heading"><strong>收藏分组提醒</strong><span>关闭某组后，该组主播开播时不通知</span></div>
+        <div id="group-notify-rules" class="group-notify-grid"></div>
+      </div>
+      <div class="card-footer"><button class="primary-button" id="save-settings">保存设置</button><span id="save-status" aria-live="polite"></span></div>
+    </section>
+    <section class="settings-card">
+      <div class="section-title"><h2>主播管理</h2><span>可单独覆盖全局提醒；收藏和已分组主播优先；拖动调整顺序</span></div>
+      <input id="meta-search" class="secondary-search" type="search" placeholder="按主播名称或别名筛选">
+      <p id="streamer-meta-status" class="streamer-meta-status" role="status" aria-live="polite"></p>
+      <div id="streamer-list" class="streamer-list"></div>
+    </section>
+    <section class="settings-card" id="diagnostics">
+      <div class="section-title"><h2>平台诊断</h2><span>勾选后才检查该平台；未授权会提醒并提供重新授权，取消勾选后不检查也不提醒</span></div>
+      <div id="diagnostics-list" class="diagnostics-list"></div>
+      <a class="text-link" href="index.html">返回列表后可立即重试授权</a>
+    </section>
+    <section class="settings-card">
+      <div class="section-title"><h2>备份与迁移</h2><span>导出文件不包含平台登录凭据</span></div>
+      <div class="backup-actions"><button class="secondary-button" id="export-backup">导出设置备份</button><label class="file-button">导入备份<input id="import-backup" type="file" accept="application/json,.json"></label><button class="secondary-button" id="webdav-open" type="button">WebDAV 配置与同步</button></div>
+      <p id="backup-status" class="hint" aria-live="polite"></p>
+    </section>
+  </main>
+  <dialog id="groups-dialog" class="meta-dialog groups-dialog">
+    <div class="meta-dialog-heading"><div><h2>收藏分组</h2><p>添加或删除分组；主播所属分组可在主播管理中设置</p></div><button class="dialog-close" id="close-groups-top" type="button" aria-label="关闭">×</button></div>
+    <form id="add-group-form" class="inline-form"><input id="new-group" maxlength="16" placeholder="新分组名称"><button class="secondary-button" type="submit">添加分组</button></form>
+    <div id="groups" class="group-list"></div>
+    <div class="meta-dialog-actions"><button class="secondary-button" id="close-groups" type="button">完成</button></div>
+  </dialog>
+  <dialog id="meta-dialog" class="meta-dialog">
+    <form id="meta-edit-form">
+      <div class="meta-dialog-heading"><div><h2 id="meta-dialog-title">主播别名</h2><p>每个别名单独添加，都会显示在主页标签中并支持搜索</p></div><button class="dialog-close" id="cancel-meta-top" type="button" aria-label="关闭">×</button></div>
+      <div id="meta-alias-list" class="meta-alias-list" aria-live="polite"></div>
+      <div class="meta-alias-field"><label for="meta-alias-input">添加别名 / 拼音</label><div class="meta-alias-input-row"><input id="meta-alias-input" maxlength="80" placeholder="输入后按回车或点添加"><button class="secondary-button" id="add-meta-alias" type="button">添加</button></div></div>
+      <p id="meta-dialog-status" class="hint" aria-live="polite"></p>
+      <div class="meta-dialog-actions"><button class="secondary-button" id="cancel-meta" type="button">取消</button><button class="primary-button" type="submit">保存别名</button></div>
+    </form>
+  </dialog>
+  <dialog id="webdav-dialog" class="meta-dialog webdav-dialog">
+    <div class="meta-dialog-heading"><div><h2>WebDAV 配置与同步</h2><p>配置仅保存在本机；可手动上传或恢复备份</p></div><button class="dialog-close" id="webdav-close-top" type="button" aria-label="关闭">×</button></div>
+    <div class="webdav-fields">
+      <label>WebDAV 服务器地址<input id="webdav-server-url" type="url" placeholder="https://dav.example.com/" autocomplete="url"></label>
+      <label class="webdav-directory-field">目录路径<input id="webdav-directory" type="text" placeholder="无目录留空" autocomplete="off"></label>
+      <label>用户名<input id="webdav-username" type="text" autocomplete="username"></label>
+      <label>密码或应用专用密码<input id="webdav-password" type="password" autocomplete="current-password"></label>
+    </div>
+    <p class="hint">目录路径相对于服务器地址；扩展会在该目录中读写 yubo-backup.json。请确认目录已存在且账号有读写权限；建议使用 HTTPS 和应用专用密码。</p>
+    <p id="webdav-status" class="hint webdav-status" aria-live="polite"></p>
+    <div class="webdav-actions"><button class="secondary-button" id="save-webdav" type="button">保存配置</button><button class="secondary-button" id="webdav-upload" type="button">上传当前配置</button><button class="primary-button" id="webdav-download" type="button">从 WebDAV 恢复</button><button class="dialog-cancel secondary-button" id="webdav-close" type="button">关闭</button></div>
+  </dialog>
+  <script src="settings.js"></script>
+</body>
+</html>

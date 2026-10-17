@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "鱼播",
+  "version": "3.3.0",
+  "description": "多平台关注主播开播提醒",
+  "icons": {
+    "16": "icon-fish-16.png",
+    "32": "icon-fish-32.png",
+    "48": "icon-fish-48.png",
+    "64": "icon-fish-64.png",
+    "128": "icon-fish-128.png"
+  },
+  "action": {
+    "default_popup": "tabs/launch.html",
+    "default_icon": {
+      "16": "icon-fish-16.png",
+      "32": "icon-fish-32.png",
+      "48": "icon-fish-48.png",
+      "64": "icon-fish-64.png",
+      "128": "icon-fish-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "static/background/yubo-worker.js"
+  },
+  "options_ui": {
+    "page": "tabs/settings.html",
+    "open_in_tab": true
+  },
+  "permissions": ["storage", "tabs", "notifications", "alarms"],
+  "host_permissions": [
+    "https://*.bilibili.com/*",
+    "https://*.douyu.com/*",
+    "https://*.huya.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ]
+}
