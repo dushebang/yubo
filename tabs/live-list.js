@@ -417,6 +417,11 @@ zuo 做作坐左
     return source.map((alias)=>String(alias||'').trim()).filter(Boolean)
   }
   const login={bilibili:'https://passport.bilibili.com/login',douyu:'https://www.douyu.com/',huya:'https://www.huya.com/'}
+  const platformSearch={
+    douyu:(query)=>'https://www.douyu.com/search?kw='+encodeURIComponent(query),
+    huya:(query)=>'https://www.huya.com/search?hsk='+encodeURIComponent(query),
+    bilibili:(query)=>'https://search.bilibili.com/all?keyword='+encodeURIComponent(query)
+  }
   const state={rooms:[],diagnostics:{},favorites:[],order:[],groups:{},groupNames:[],settings:{},streamerMeta:{},enabledPlatforms:Object.keys(names),filter:'all',liveCardMode:false,platform:'all',group:'all',query:'',refreshing:false,authNoticeDismissed:false}
   let timer,searchComposing=false
   document.addEventListener('keydown',(e)=>{
@@ -510,12 +515,13 @@ zuo 做作坐左
       const count=state.favorites.filter((id)=>state.groups[id]===n).length,active=state.filter==='favorites'&&state.group===n
       return '<button data-group-tab="'+esc(n)+'" class="filter-tab group-tab '+(active?'active':'')+'">'+esc(n)+' <span>'+count+'</span></button>'
     }).join('')
+    const emptySearch=state.query.trim()?'<div class="empty-search"><span>是否到平台搜索“'+esc(state.query.trim())+'”？</span><div class="empty-search-actions"><button type="button" class="empty-search-button" data-platform-search="douyu">搜索斗鱼</button><button type="button" class="empty-search-button" data-platform-search="huya">搜索虎牙</button><button type="button" class="empty-search-button" data-platform-search="bilibili">搜索 B 站</button></div></div>':''
     const health=platforms.map(([id,n])=>{const x=state.diagnostics[id],cls=x&&x.ok?'ok':x&&x.authRequired?'auth':x?'failed':'unknown',label=x&&x.ok?x.count+' 位':x&&x.authRequired?'需登录':x?'读取失败':'',action=x&&x.authRequired?'<button type="button" class="health-auth-button" data-auth="'+esc(id)+'">重新授权</button>':'';return '<span class="health-item '+cls+'"><i></i>'+esc(n)+(label?' · '+esc(label):'')+action+'</span>'}).join('')
     const authMarkup=auth.length&&!state.authNoticeDismissed?'<section class="auth-notices"><div class="auth-notice-heading"><strong>平台授权需要恢复</strong><button type="button" class="auth-dismiss" id="dismiss-auth-notices" title="暂时关闭提示" aria-label="暂时关闭平台授权提示">×</button></div>'+auth.map(([id])=>'<div class="auth-notice"><span>'+esc(names[id]||id)+'登录已失效</span><div class="auth-notice-actions"><button class="auth-button" data-auth="'+esc(id)+'">重新授权</button></div></div>').join('')+'</section>':''
     const failedMarkup=failed.length?'<div class="load-notice">'+failed.map(([id])=>esc(names[id]||id)).join('、')+'暂时读取失败；保留上次数据并稍后重试。</div>':''
     app.innerHTML='<header class="top"><div class="brand"><span class="title">鱼播</span><span class="subtitle">关注列表</span></div><div class="top-meta"><span class="count">'+live+' 正在直播 · '+state.rooms.length+' 位关注</span><span class="updated">更新于 '+esc(time(state.updated))+'</span></div><div class="top-actions"><button class="tool-button" id="refresh" '+(state.refreshing?'disabled':'')+'>'+(state.refreshing?'更新中…':'↻ 刷新')+'</button><nav class="site-nav" aria-label="页面导航"><a class="tool-button nav-link active" href="index.html" aria-current="page">关注列表</a><a class="tool-button nav-link" href="history.html">直播记录</a><a class="tool-button nav-link" href="shortcuts.html">快捷键</a><a class="tool-button nav-link" href="settings.html">设置</a></nav></div></header>'+
       '<section class="toolbar"><div class="filter-tabs"><button data-filter="all" class="filter-tab '+(state.filter==='all'?'active':'')+'">全部 <span>'+state.rooms.length+'</span></button><button data-filter="live" class="filter-tab '+(state.filter==='live'?'active':'')+'">正在直播 <span>'+live+'</span></button><button data-filter="favorites" class="filter-tab '+(state.filter==='favorites'&&state.group==='all'?'active':'')+'">收藏 <span>'+fav+'</span></button>'+groupTabs+'</div><input id="search" class="search" type="search" placeholder="支持中文、拼音、首字母、房间号" value="'+esc(state.query)+'"><select id="platform-filter" class="select-filter"><option value="all">全部平台</option>'+platformOptions+'</select>'+(state.filter==='live'?'<button id="live-view-toggle" class="tool-button live-view-toggle '+(state.liveCardMode?'active':'')+'" type="button">'+(state.liveCardMode?'切回原样':'封面模式')+'</button>':'')+'</section>'+
-      '<section class="platform-health">'+health+'<a class="diagnostics-link" href="settings.html#diagnostics">诊断详情</a></section>'+authMarkup+failedMarkup+'<section class="rows '+(state.filter==='live'&&state.liveCardMode?'live-view':'')+'">'+(list.length?list.map(card).join(''):'<div class="empty">'+(state.rooms.length?'没有符合条件的主播':state.enabledPlatforms.length?'暂无关注主播':'尚未启用平台，请前往设置启用')+'</div>')+'</section>'
+      '<section class="platform-health">'+health+'<a class="diagnostics-link" href="settings.html#diagnostics">诊断详情</a></section>'+authMarkup+failedMarkup+'<section class="rows '+(state.filter==='live'&&state.liveCardMode?'live-view':'')+'">'+(list.length?list.map(card).join(''):'<div class="empty"><div>'+(state.rooms.length?'没有符合条件的主播':state.enabledPlatforms.length?'暂无关注主播':'尚未启用平台，请前往设置启用')+'</div>'+emptySearch+'</div>')+'</section>'
     if(focused){const input=document.getElementById('search');input.focus();const position=Math.min(cursor,input.value.length);input.setSelectionRange(position,position)}
     app.querySelectorAll('[data-filter]').forEach((b)=>b.addEventListener('click',()=>{state.filter=b.dataset.filter;state.group='all';render()}))
     app.querySelectorAll('[data-group-tab]').forEach((b)=>b.addEventListener('click',()=>{state.filter='favorites';state.group=b.dataset.groupTab;render()}))
@@ -523,6 +529,10 @@ zuo 做作坐左
     search.addEventListener('compositionstart',()=>{searchComposing=true})
     search.addEventListener('compositionend',(e)=>{searchComposing=false;state.query=e.target.value;render()})
     search.addEventListener('input',(e)=>{state.query=e.target.value;if(!searchComposing)render()})
+    app.querySelectorAll('[data-platform-search]').forEach((button)=>button.addEventListener('click',()=>{
+      const query=state.query.trim(),buildUrl=platformSearch[button.dataset.platformSearch]
+      if(query&&buildUrl)chrome.tabs.create({url:buildUrl(query)})
+    }))
     document.getElementById('platform-filter').addEventListener('change',(e)=>{state.platform=e.target.value;render()})
     const liveViewToggle=document.getElementById('live-view-toggle')
     if(liveViewToggle)liveViewToggle.addEventListener('click',()=>{state.liveCardMode=!state.liveCardMode;render()})
