@@ -424,13 +424,31 @@ zuo 做作坐左
   }
   const state={rooms:[],diagnostics:{},favorites:[],order:[],groups:{},groupNames:[],settings:{},streamerMeta:{},enabledPlatforms:Object.keys(names),filter:'all',liveCardMode:false,platform:'all',group:'all',query:'',refreshing:false,authNoticeDismissed:false}
   let timer,searchComposing=false
+  document.addEventListener('click',(e)=>{
+    if(!state.query)return
+    const target=e.target instanceof Element?e.target:null
+    if(target&&target.closest('input,textarea,select,button,a,[contenteditable="true"],[contenteditable=""],.row'))return
+    state.query='';render()
+  })
   document.addEventListener('keydown',(e)=>{
     if(e.key==='Escape'){
       if(!e.isComposing&&!searchComposing&&state.query){e.preventDefault();state.query='';render()}
       return
     }
     const target=e.target instanceof Element?e.target:null
-    if(e.ctrlKey||e.metaKey||e.altKey||e.isComposing||searchComposing||target&&target.closest('input,textarea,select,button,a,[contenteditable="true"],[contenteditable=""]'))return
+    if(e.ctrlKey||e.metaKey||e.altKey||e.isComposing||searchComposing)return
+    const targetIsFilterTab=!!(target&&target.closest('.filter-tab'))
+    if(target&&target.closest('input,textarea,select,[contenteditable="true"],[contenteditable=""]'))return
+    if(target&&!targetIsFilterTab&&target.closest('button,a'))return
+    if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
+      const tabs=[{filter:'all',group:'all'},{filter:'live',group:'all'},{filter:'favorites',group:'all'},...state.groupNames.map((group)=>({filter:'favorites',group}))]
+      const current=tabs.findIndex((tab)=>tab.filter===state.filter&&tab.group===state.group)
+      const index=current<0?0:(current+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length
+      e.preventDefault()
+      state.filter=tabs[index].filter;state.group=tabs[index].group;render()
+      const activeTab=document.querySelector('.filter-tab.active');if(activeTab)activeTab.focus()
+      return
+    }
     if(e.key==='/'){
       e.preventDefault()
       const search=document.getElementById('search')

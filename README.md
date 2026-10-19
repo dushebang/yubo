@@ -1,4 +1,4 @@
-# 鱼播（Yubo）3.3.1
+# 鱼播（Yubo）3.3.2
 
 开发过程中的功能更新与修复记录见 [CHANGELOG.md](CHANGELOG.md)。
 
