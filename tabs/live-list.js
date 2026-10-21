@@ -536,8 +536,40 @@ zuo 做作坐左
   function roomHeading(r, staleLabel) {
     const title=displayRoomTitle(r.title)
     const tooltip=(r.titleStale?'上次标题（本次接口未返回）：':'')+title
-    return '<span class="name-line '+(title?'has-room-title':'')+'"><span class="name">'+esc(r.name)+(r.stale?'<small class="stale-label">'+esc(staleLabel)+'</small>':'')+'</span>'+(title?'<span class="room-title" title="'+esc(tooltip)+'"><span class="room-title-text">'+esc(title)+'</span></span>':'')+'</span>'
+    return '<span class="name-line '+(title?'has-room-title':'')+'"><span class="name">'+esc(r.name)+(r.stale?'<small class="stale-label">'+esc(staleLabel)+'</small>':'')+'</span>'+(title?'<span class="room-title" data-room-title="'+esc(tooltip)+'"><span class="room-title-text">'+esc(title)+'</span></span>':'')+'</span>'
   }
+  let titleTooltip,titleTooltipTimer,titleTooltipAnchor
+  function hideRoomTitleTooltip(){
+    clearTimeout(titleTooltipTimer)
+    titleTooltipAnchor?.removeAttribute('aria-describedby')
+    titleTooltipAnchor=null
+    if(titleTooltip)titleTooltip.hidden=true
+  }
+  function showRoomTitleTooltip(anchor){
+    hideRoomTitleTooltip()
+    titleTooltipTimer=setTimeout(()=>{
+      if(!anchor.isConnected)return
+      if(!titleTooltip){
+        titleTooltip=document.createElement('div')
+        titleTooltip.id='room-title-tooltip'
+        titleTooltip.className='room-title-tooltip'
+        titleTooltip.setAttribute('role','tooltip')
+        document.body.append(titleTooltip)
+      }
+      titleTooltip.textContent=anchor.dataset.roomTitle
+      titleTooltip.hidden=false
+      titleTooltipAnchor=anchor
+      anchor.setAttribute('aria-describedby',titleTooltip.id)
+      const rect=anchor.getBoundingClientRect(),bounds=titleTooltip.getBoundingClientRect(),gap=9,edge=12
+      titleTooltip.style.left=Math.max(edge,Math.min(rect.left,window.innerWidth-bounds.width-edge))+'px'
+      const top=rect.bottom+gap+bounds.height<=window.innerHeight-edge?rect.bottom+gap:rect.top-bounds.height-gap
+      titleTooltip.style.top=Math.max(edge,top)+'px'
+    },220)
+  }
+  window.addEventListener('scroll',hideRoomTitleTooltip,true)
+  window.addEventListener('resize',hideRoomTitleTooltip)
+  window.addEventListener('blur',hideRoomTitleTooltip)
+  document.addEventListener('keydown',(event)=>{if(event.key==='Escape')hideRoomTitleTooltip()})
   function measureRoomTitle(title) {
     if(!title?.isConnected)return
     const text=title.querySelector('.room-title-text'),distance=Math.max(0,text.scrollWidth-title.clientWidth)
@@ -549,9 +581,16 @@ zuo 做作坐左
     for(const entry of entries)measureRoomTitle(entry.target.closest('.room-title'))
   })
   function observeRoomTitles(){
+    hideRoomTitleTooltip()
     roomTitleObserver.disconnect()
     app.querySelectorAll('.room-title').forEach((title)=>{
       measureRoomTitle(title);roomTitleObserver.observe(title);roomTitleObserver.observe(title.firstElementChild)
+      title.addEventListener('mouseenter',()=>showRoomTitleTooltip(title))
+      title.addEventListener('mouseleave',hideRoomTitleTooltip)
+      const link=title.closest('.stream-link')
+      link?.addEventListener('focus',()=>showRoomTitleTooltip(title))
+      link?.addEventListener('blur',hideRoomTitleTooltip)
+      link?.addEventListener('click',hideRoomTitleTooltip)
     })
   }
   function card(r){
@@ -585,7 +624,7 @@ zuo 做作坐左
       return '<button data-group-tab="'+esc(n)+'" class="filter-tab group-tab '+(active?'active':'')+'">'+esc(n)+' <span>'+count+'</span></button>'
     }).join('')+state.temporary.activities.map((item)=>'<button data-activity-tab="'+esc(item.id)+'" class="filter-tab '+(isTemporary&&item.id===state.group?'active':'')+'">'+esc(item.name)+' <span>'+item.rooms.length+'</span></button>').join('')
     const emptySearch=state.query.trim()?'<div class="empty-search"><span>是否到平台搜索“'+esc(state.query.trim())+'”？</span><div class="empty-search-actions"><button type="button" class="empty-search-button" data-platform-search="douyu">搜索斗鱼</button><button type="button" class="empty-search-button" data-platform-search="huya">搜索虎牙</button><button type="button" class="empty-search-button" data-platform-search="bilibili">搜索 B 站</button></div></div>':''
-    const health=platforms.map(([id,n])=>{const x=state.diagnostics[id],cls=x&&x.ok?'ok':x&&x.authRequired?'auth':x?'failed':'unknown',label=x&&x.ok?x.count+' 位':x&&x.authRequired?'需登录':x?'读取失败':'',action=x&&x.authRequired?'<button type="button" class="health-auth-button" data-auth="'+esc(id)+'">重新授权</button>':'';return '<span class="health-item '+cls+'"><i></i>'+esc(n)+(label?' · '+esc(label):'')+action+'</span>'}).join('')
+    const health=platforms.map(([id,n])=>{const x=state.diagnostics[id],cls=x&&x.ok?'ok':x&&x.authRequired?'auth':x?'failed':'unknown',label=x&&x.ok?x.count+' 位':x&&x.authRequired?'需登录':x?'读取失败':'',action=x&&x.authRequired?'<button type="button" class="health-auth-button" data-auth="'+esc(id)+'">重新授权</button>':'';return '<span class="health-item '+cls+'"><i></i>'+esc(n)+(label?' · '+esc(label):'')+action+'</span>'}).join('')+(auth.length?'<span class="health-auth-hint">或到“<a class="health-auth-button" href="settings.html#diagnostics">平台诊断</a>”设置取消勾选“启用平台”</span>':'')
     const authMarkup=auth.length&&!state.authNoticeDismissed?'<section class="auth-notices"><div class="auth-notice-heading"><strong>平台授权需要恢复</strong><button type="button" class="auth-dismiss" id="dismiss-auth-notices" title="暂时关闭提示" aria-label="暂时关闭平台授权提示">×</button></div>'+auth.map(([id])=>'<div class="auth-notice"><span>'+esc(names[id]||id)+'登录已失效</span><div class="auth-notice-actions"><button class="auth-button" data-auth="'+esc(id)+'">重新授权</button></div></div>').join('')+'</section>':''
     const failedMarkup=failed.length?'<div class="load-notice">'+failed.map(([id])=>esc(names[id]||id)).join('、')+'暂时读取失败；保留上次数据并稍后重试。</div>':''
     const unknown=isTemporary?source.filter((r)=>!r.statusKnown||r.stale).length:0

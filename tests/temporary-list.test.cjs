@@ -27,6 +27,84 @@ function harness(options = {}) {
 const roomPayload = (id, live = 1) => ({ room: { room_id: Number(id), nickname: '主播 '+id, show_status: live, videoLoop: 0, avatar: { big: 'https://example.com/avatar.png' }, room_name: '活动直播', second_lvl_name: '户外' } })
 const loader = (topic = 'STLD', id = '59047') => `window.zhtName = '${topic}'; var webm_page_config = location.protocol + '//butterfly.douyucdn.cn/api/page/loadPage?name=pageData2&pageId=${id}&ver=abc';`
 
+test('page-side backup reads storage without any new worker action, migration writes or cache changes',async()=>{
+  const h=harness();await create(h,'活动',[1,2])
+  const before=JSON.stringify(h.data),writeCount=h.writes.length
+  const direct=await h.module.readBackup(h.area),throughWorker=await h.controller.exportBackup()
+  assert.equal(JSON.stringify(direct),JSON.stringify(throughWorker))
+  assert.equal(JSON.stringify(h.data),before);assert.equal(h.writes.length,writeCount)
+  const old=harness();old.data[old.module.LEGACY_KEY]={rooms:[old.module.roomLink('https://www.douyu.com/1')],sources:[]}
+  assert.equal((await old.module.readBackup(old.area)).activities[0].rooms[0].url,'https://www.douyu.com/1')
+  assert.equal(old.writes.length,0)
+  assert.equal(old.data[old.module.KEY],undefined)
+})
+
+test('portable backup round-trips multiple activity names, sources and selected rooms into a fresh browser', async () => {
+  const source = harness({respond:()=>roomPayload(1)})
+  const candidate = await source.controller.preview('https://www.douyu.com/1\nhttps://www.huya.com/lpl','rooms')
+  const first = await source.controller.save({name:'活动甲',candidate:{...candidate,mode:'activity',sources:['https://www.douyu.com/91124']}})
+  await source.controller.refresh(first.activities[0].id,true)
+  await source.controller.save({name:'活动乙',candidate:await source.controller.preview('https://live.bilibili.com/6','rooms')})
+  source.data[source.module.KEY].activities[0].cookie='must-not-export'
+  source.data[source.module.KEY].activities[0].rooms[0].token='must-not-export'
+  const portable = JSON.parse(JSON.stringify(await source.controller.exportBackup()))
+  assert.equal(portable.activities.length,2)
+  assert.equal(portable.activities[0].rooms[0].name,'主播 1')
+  assert.ok(!JSON.stringify(portable).includes('must-not-export'))
+  assert.equal(portable.activities[0].rooms[0].live,undefined)
+  const target=harness(),restored=await target.controller.restoreBackup(portable)
+  assert.deepEqual(Array.from(restored.activities,a=>a.name),['活动甲','活动乙'])
+  assert.equal(restored.activities[0].input,'https://www.douyu.com/91124')
+  assert.equal(restored.activities[1].input,'https://live.bilibili.com/6')
+  assert.equal(restored.activities[0].rooms[0].statusKnown,false)
+  assert.equal(restored.activities[0].updatedAt,0)
+  assert.notEqual(restored.activities[0].id,first.activities[0].id)
+  assert.equal(JSON.stringify(await target.controller.exportBackup()),JSON.stringify(portable))
+  assert.deepEqual(target.data.favorite_streamers,['dy_9999'])
+  assert.ok(target.writes.every(write=>Object.keys(write).length===1&&target.module.KEY in write))
+})
+
+test('export includes migrated legacy single-list activities',async()=>{
+  const h=harness()
+  h.data[h.module.LEGACY_KEY]={rooms:[h.module.roomLink('https://www.douyu.com/1')],sources:['https://www.douyu.com/91124']}
+  const portable=await h.controller.exportBackup()
+  assert.equal(portable.activities[0].name,'临时活动')
+  assert.equal(portable.activities[0].sources[0],'https://www.douyu.com/91124')
+})
+
+test('invalid portable activities fail validation before changing any stored data',async()=>{
+  const h=harness();await create(h,'原活动',[1])
+  const valid=JSON.parse(JSON.stringify(await h.controller.exportBackup())),before=JSON.stringify(h.data)
+  const invalids=[null,{version:99,activities:[]},{version:1,activities:Array(21).fill(valid.activities[0])}]
+  for(const edit of [a=>a.name='',a=>a.rooms=[{url:'javascript:alert(1)'}],a=>a.rooms.push(a.rooms[0]),a=>{a.mode='activity';a.sources=['https://evil.example/secret']},a=>a.rooms=Array(301).fill(a.rooms[0])]){
+    const copy=structuredClone(valid);edit(copy.activities[0]);invalids.push(copy)
+  }
+  for(const invalid of invalids)await assert.rejects(h.controller.restoreBackup(invalid))
+  assert.equal(JSON.stringify(h.data),before)
+})
+
+test('an explicitly empty activity backup clears the collection without reviving the legacy backup',async()=>{
+  const h=harness();h.data[h.module.LEGACY_KEY]={rooms:[h.module.roomLink('https://www.douyu.com/1')],sources:[]}
+  await h.controller.exportBackup()
+  await h.controller.restoreBackup({version:1,activities:[]})
+  assert.equal((await h.controller.read()).activities.length,0)
+  assert.equal((await h.controller.exportBackup()).activities.length,0)
+})
+
+test('in-flight status polling cannot overwrite restored activities',async()=>{
+  let release;const pending=new Promise(resolve=>{release=resolve})
+  const h=harness({respond:async()=>{await pending;return roomPayload(1)}})
+  const old=await create(h,'旧活动',[1]),snapshot=await h.controller.exportBackup()
+  snapshot.activities[0].name='恢复活动'
+  const polling=h.controller.refresh(old.id,true);await new Promise(setImmediate)
+  const restored=await h.controller.restoreBackup(snapshot)
+  release();await polling
+  const current=await h.controller.read()
+  assert.equal(current.activities[0].id,restored.activities[0].id)
+  assert.equal(current.activities[0].name,'恢复活动')
+  assert.equal(current.activities[0].rooms[0].statusKnown,false)
+})
+
 test('room URLs are canonical, deduplicated and restricted to supported room paths', () => {
   const { module } = harness()
   assert.equal(module.roomLink('http://www.douyu.com/9999?dyshid=tracking').url, 'https://www.douyu.com/9999')
@@ -252,8 +330,21 @@ test('real worker routes activity-specific messages without touching official fo
   await new Promise(setImmediate)
   assert.equal(data[module.KEY].activities[0].rooms[0].statusKnown,true)
   assert.equal((await send('rename',{id,name:'新名称'})).value.activities[0].name,'新名称')
+  const portable=await send('export-backup')
+  assert.equal(portable.ok,true)
+  assert.equal(portable.value.activities[0].name,'新名称')
+  assert.equal(portable.value.activities[0].rooms[0].live,undefined)
   assert.equal((await send('read')).value.activities.length,1)
+  const capabilities=await send('read',{backupCapabilities:true})
+  assert.equal(capabilities.value.backupProtocol,1)
+  assert.equal(data[module.KEY].backupProtocol,undefined)
   assert.equal((await send('remove',{id})).value.activities.length,0)
+  const restored=await send('restore-backup',{backup:portable.value})
+  assert.equal(restored.ok,true)
+  assert.equal(restored.value.activities[0].name,'新名称')
+  assert.notEqual(restored.value.activities[0].id,id)
+  assert.equal((await send('restore-backup',{backup:{version:99,activities:[]}})).ok,false)
+  assert.equal((await send('read')).value.activities.length,1)
   assert.equal(notificationCount,0)
   assert.deepEqual(data.favorite_streamers,['dy_9999'])
   assert.deepEqual(data.yubo_last_rooms,[{id:'dy_9999'}])

@@ -1,7 +1,7 @@
 (() => {
   const sync = chrome.storage.sync, local = chrome.storage.local
-  const get = (area, key) => new Promise((resolve) => area.get(key, (x) => resolve(x[key])))
-  const set = (area, values) => new Promise((resolve) => area.set(values, resolve))
+  const get = (area, key) => new Promise((resolve,reject) => area.get(key, (x) => chrome.runtime.lastError?reject(new Error(chrome.runtime.lastError.message)):resolve(x[key])))
+  const set = (area, values) => new Promise((resolve,reject) => area.set(values, () => chrome.runtime.lastError?reject(new Error(chrome.runtime.lastError.message)):resolve()))
   const decode = (value) => { if (typeof value !== 'string') return value; try { return JSON.parse(value) } catch { return value } }
   const esc = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c])
   const objectOrEmpty = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {}
@@ -259,18 +259,39 @@
     renderLists();node.scrollTop=scroll
   })
   async function createBackup(){
-    const [intervalValue,enabledValue,muteValue]=await Promise.all([get(sync,'check_interval'),get(sync,'enabled_platforms'),get(sync,'mute_notification')])
+    // Export is read-only and must also work while an older worker is still running.
+    const [intervalValue,enabledValue,muteValue,temporaryActivities]=await Promise.all([get(sync,'check_interval'),get(sync,'enabled_platforms'),get(sync,'mute_notification'),YuboTemporary.readBackup(local)])
     const savedPlatforms=decode(enabledValue),enabled=Array.isArray(savedPlatforms)?savedPlatforms.filter((id)=>names[id]):Object.keys(names)
-    return {format:'yubo-backup-v1',exportedAt:new Date().toISOString(),favorites,favoriteOrder:order,streamerOrder,favoriteGroups:groups,favoriteGroupNames:groupNames,groupNotificationRules,streamerMeta,streamerNotificationOverrides:notificationOverrides,settings,hiddenRooms:hidden,checkInterval:Number(decode(intervalValue))||3,enabledPlatforms:enabled,muteAll:!!decode(muteValue)}
+    return {format:'yubo-backup-v1',exportedAt:new Date().toISOString(),favorites,favoriteOrder:order,streamerOrder,favoriteGroups:groups,favoriteGroupNames:groupNames,groupNotificationRules,streamerMeta,streamerNotificationOverrides:notificationOverrides,settings,hiddenRooms:hidden,checkInterval:Number(decode(intervalValue))||3,enabledPlatforms:enabled,muteAll:!!decode(muteValue),temporaryActivities}
   }
   async function applyBackup(b){
     if(!b||b.format!=='yubo-backup-v1')throw new Error('备份格式不正确')
+    // Validate before changing any settings. Missing in older v1 files means
+    // preserve current activities; an explicit empty array means clear them.
+    const hasActivities=Object.prototype.hasOwnProperty.call(b,'temporaryActivities')
+    const activities=hasActivities?YuboTemporary.normalizeBackup(b.temporaryActivities):null
     const fav=Array.isArray(b.favorites)?b.favorites:[],groupNamesIn=Array.isArray(b.favoriteGroupNames)&&b.favoriteGroupNames.length?b.favoriteGroupNames:['常看']
     const enabled=Array.isArray(b.enabledPlatforms)?b.enabledPlatforms.filter((id)=>names[id]):Object.keys(names)
+    if(hasActivities){
+      const runtime=await YuboTemporaryUI.request('read',{backupCapabilities:true})
+      if(runtime?.backupProtocol!==1){
+        document.getElementById('reload-backup-runtime').hidden=false
+        throw new Error('设置页面已更新，但扩展后台尚未更新；本次未导入，也未修改现有设置或活动。导出备份仍可使用，请点击“更新后台”后重新打开设置再导入。')
+      }
+      document.getElementById('reload-backup-runtime').hidden=true
+      await YuboTemporaryUI.request('restore-backup',{backup:activities})
+    }
     await set(sync,{favorite_streamers:fav,hidden_rooms:Array.isArray(b.hiddenRooms)?b.hiddenRooms:[],check_interval:Math.max(1,Math.min(60,Number(b.checkInterval)||3)),enabled_platforms:enabled,mute_notification:!!b.muteAll})
     await set(local,{yubo_favorite_order:Array.isArray(b.favoriteOrder)?b.favoriteOrder:fav,yubo_streamer_order:Array.isArray(b.streamerOrder)?b.streamerOrder:[],yubo_favorite_groups:objectOrEmpty(b.favoriteGroups),yubo_favorite_group_names:groupNamesIn,yubo_group_notification_rules:objectOrEmpty(b.groupNotificationRules),yubo_streamer_meta:normalizeStreamerMeta(b.streamerMeta),yubo_streamer_notification_overrides:normalizeNotificationOverrides(b.streamerNotificationOverrides),yubo_settings:{...defaults,...objectOrEmpty(b.settings)},yubo_snoozed_streamers:{}})
+    if(hasActivities){
+      const stored=await YuboTemporary.readBackup(local)
+      if(JSON.stringify(stored)!==JSON.stringify(activities))throw new Error('设置已处理，但临时活动写入后的核验不一致，请重新加载扩展后重试；不要清除原浏览器数据。')
+    }
     await load()
+    return activities
   }
+  function activityBackupNotice(b){return Object.prototype.hasOwnProperty.call(b,'temporaryActivities')?'备份中的临时活动也将替换当前活动。':'此旧备份不含临时活动，当前活动将保留。'}
+  function activityBackupSummary(activities){return activities.activities.length+' 个临时活动 / '+activities.activities.reduce((total,activity)=>total+activity.rooms.length,0)+' 个主播条目'}
   function webdavFormParts(config){
     if(config&&config.serverUrl)return {serverUrl:config.serverUrl,directory:config.directory||'',filename:config.filename||'yubo-backup.json'}
     if(config&&config.url){
@@ -323,15 +344,22 @@
     webdavConfig=readWebdavForm();await set(local,{yubo_webdav_config:webdavConfig});return webdavConfig
   }
   document.getElementById('export-backup').addEventListener('click',async()=>{
+    try{
     const backup=await createBackup()
     const url=URL.createObjectURL(new Blob([JSON.stringify(backup,null,2)],{type:'application/json'})),link=document.createElement('a')
     link.href=url;link.download='yubo-backup-'+new Date().toISOString().slice(0,10)+'.json';link.click();URL.revokeObjectURL(url)
-    document.getElementById('backup-status').textContent='备份已导出；文件不含 Cookie 或令牌。'
+    document.getElementById('backup-status').textContent='备份已导出（含 '+backup.temporaryActivities.activities.length+' 个临时活动）；文件不含 Cookie 或令牌。'
+    }catch(error){document.getElementById('backup-status').textContent=error.message||'导出失败，未生成备份'}
+  })
+  document.getElementById('reload-backup-runtime').addEventListener('click',()=>{
+    if(confirm('重新加载鱼播以更新后台？不会卸载扩展或清除数据；当前扩展页面可能关闭，请重新打开设置后再导入。'))chrome.runtime.reload()
   })
   document.getElementById('import-backup').addEventListener('change',async(e)=>{
     const file=e.target.files&&e.target.files[0];if(!file)return
     try{
-      const b=JSON.parse(await file.text());await applyBackup(b);document.getElementById('backup-status').textContent='备份已导入；令牌需在本扩展中重新获取。'
+      const b=JSON.parse(await file.text())
+      if(!confirm('导入会覆盖当前收藏、分组和提醒设置。'+activityBackupNotice(b)+'确定继续吗？'))return
+      const activities=await applyBackup(b);document.getElementById('backup-status').textContent='备份已导入。'+(activities?'已恢复并核验 '+activityBackupSummary(activities)+'，开播状态将在后续刷新时重新检测。':'旧备份不含临时活动，当前活动已保留。')+'平台登录状态不会随备份迁移。'
     }catch(error){document.getElementById('backup-status').textContent=error.message||'导入失败'}
     finally{e.target.value=''}
   })
@@ -340,20 +368,35 @@
   })
   document.getElementById('webdav-upload').addEventListener('click',async()=>{
     const statusNode=document.getElementById('webdav-status')
+    statusNode.textContent='正在读取当前浏览器的备份内容…'
     try{
       const config=readWebdavForm(),target=webdavFileUrl(config),permission=requestWebdavPermission(target);webdavConfig=config;await set(local,{yubo_webdav_config:config})
       if(!await permission)throw new Error('未授予此 WebDAV 服务器的访问权限')
-      await webdavRequest(config,'PUT',await createBackup());statusNode.textContent='配置已上传：'+target
+      const backup=await createBackup(),expected=YuboTemporary.normalizeBackup(backup.temporaryActivities)
+      statusNode.textContent='正在上传 '+activityBackupSummary(expected)+'…'
+      await webdavRequest(config,'PUT',backup)
+      // A successful PUT alone does not prove another browser can read this snapshot.
+      try{
+        const returned=await (await webdavRequest(config,'GET')).json()
+        if(!returned||returned.format!=='yubo-backup-v1'||!Object.prototype.hasOwnProperty.call(returned,'temporaryActivities'))throw new Error('服务器读回的文件不含临时活动，可能读到了旧文件或另一目录。')
+        if(returned.exportedAt!==backup.exportedAt||JSON.stringify(YuboTemporary.normalizeBackup(returned.temporaryActivities))!==JSON.stringify(expected))throw new Error('服务器读回的备份与本次上传不一致，可能尚未更新或读到了旧文件。')
+      }catch(error){throw new Error('上传请求已接受，但读回核验失败：'+error.message)}
+      statusNode.textContent='配置已上传并读回核验：'+activityBackupSummary(expected)+'。'+(!expected.activities.length?'当前浏览器导出的活动数为 0；若原页面有活动，请重新加载扩展并重新打开设置页后再上传。':'')+' 文件：'+target
     }catch(error){statusNode.textContent=error.message||'上传失败'}
   })
   document.getElementById('webdav-download').addEventListener('click',async()=>{
     const statusNode=document.getElementById('webdav-status')
+    statusNode.textContent='正在读取服务器备份并核验临时活动…'
     try{
       const config=readWebdavForm(),target=webdavFileUrl(config),permission=requestWebdavPermission(target);webdavConfig=config;await set(local,{yubo_webdav_config:config})
       if(!await permission)throw new Error('未授予此 WebDAV 服务器的访问权限')
       const backup=await (await webdavRequest(config,'GET')).json()
-      if(!confirm('从 WebDAV 恢复会覆盖当前收藏、分组和提醒设置，确定继续吗？'))return
-      await applyBackup(backup);statusNode.textContent='已从此文件恢复：'+target
+      const present=!!backup&&Object.prototype.hasOwnProperty.call(backup,'temporaryActivities')
+      const activitySummary=present?activityBackupSummary(YuboTemporary.normalizeBackup(backup.temporaryActivities)):'不含临时活动（旧备份），本次不会恢复活动'
+      statusNode.textContent='已读取备份：'+activitySummary+'。文件：'+target
+      if(!confirm('从 WebDAV 恢复会覆盖当前收藏、分组和提醒设置。'+activityBackupNotice(backup)+'确定继续吗？'))return
+      const restored=await applyBackup(backup)
+      statusNode.textContent='已从此文件恢复：'+target+'。'+(restored?'已恢复并核验 '+activityBackupSummary(restored)+'。':'此备份文件不含临时活动，未恢复任何活动，当前活动已保留。')
     }catch(error){statusNode.textContent=error.message||'恢复失败'}
   })
   chrome.storage.onChanged.addListener((changes, area) => {

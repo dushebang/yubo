@@ -169,6 +169,47 @@
       live: Number(info.live_status) === 1, canonicalRoomId: String(info.room_id) }
   }
 
+  // Portable backup: only activity definitions and room links/names, never live
+  // state, cache revisions, arbitrary storage fields or credentials.
+  function normalizeBackup(value) {
+    if (!value || value.version !== 1 || !Array.isArray(value.activities)) throw new Error('临时活动备份格式不正确，未导入。')
+    if (value.activities.length > MAX_ACTIVITIES) throw new Error('临时活动备份超过 20 个活动，未导入。')
+    return { version: 1, activities: value.activities.map((activity) => {
+      if (!activity || typeof activity.name !== 'string' || !activity.name.trim() || activity.name.trim().length > 24) throw new Error('临时活动名称无效，未导入。')
+      if (!['activity','rooms'].includes(activity.mode) || !Array.isArray(activity.sources) || activity.sources.length > 5 || activity.sources.some((source) => typeof source !== 'string' || !supportedPage(source))) throw new Error('临时活动来源无效，未导入。')
+      if (activity.mode === 'activity' && !activity.sources.length) throw new Error('临时活动缺少活动页来源，未导入。')
+      if (activity.mode === 'rooms' && activity.sources.length) throw new Error('直播间列表的来源格式无效，未导入。')
+      if (!Array.isArray(activity.rooms) || activity.rooms.length > MAX_ROOMS) throw new Error('临时活动主播名单无效或超过 300 位，未导入。')
+      const ids = new Set()
+      const rooms = activity.rooms.map((room) => {
+        const canonical = roomLink(room?.url)
+        if (!canonical || ids.has(canonical.id)) throw new Error('临时活动包含无效或重复的直播间，未导入。')
+        ids.add(canonical.id)
+        return { url: canonical.url, name: typeof room.name === 'string' && room.name.trim() ? room.name.trim().slice(0,200) : canonical.name }
+      })
+      return { name: activity.name.trim(), mode: activity.mode, sources: [...new Set(activity.sources)], rooms }
+    }) }
+  }
+
+  function backupFromCollection(collection) {
+    if (!collection || collection.version !== 2 || !Array.isArray(collection.activities)) throw new Error('活动数据格式异常，未导出备份。')
+    return normalizeBackup({ version: 1, activities: collection.activities.map((activity) => ({
+      name: activity.name, mode: activity.mode, sources: activity.sources, rooms: activity.rooms
+    })) })
+  }
+  async function readBackup(area) {
+    const get = (key) => new Promise((resolve,reject) => area.get(key,(data) => {
+      const error=globalThis.chrome?.runtime?.lastError
+      error?reject(new Error(error.message)):resolve(data?.[key])
+    }))
+    const saved=await get(KEY)
+    if(saved!==undefined)return backupFromCollection(saved)
+    const legacy=await get(LEGACY_KEY)
+    if(!legacy || !Array.isArray(legacy.rooms) || !legacy.rooms.length)return {version:1,activities:[]}
+    const sources=Array.isArray(legacy.sources)?legacy.sources.filter(supportedPage):[]
+    return backupFromCollection({version:2,activities:[{name:'临时活动',mode:sources.length?'activity':'rooms',sources,rooms:legacy.rooms}]})
+  }
+
   function createController(area, options = {}) {
     const fetcher = options.fetch || globalThis.fetch
     let queue = Promise.resolve(), sequence = 0
@@ -239,6 +280,17 @@
         return write({ ...collection, activities: collection.activities.filter((item) => item.id !== id) })
       })
     }
+    async function exportBackup() {
+      return serial(async () => backupFromCollection(await load()))
+    }
+    async function restoreBackup(value) {
+      const portable = normalizeBackup(value)
+      return serial(() => write({ version: 2, activities: portable.activities.map((activity) => ({
+        ...activity, id: 'activity-'+revision(), revision: revision(), importedAt: Date.now(), updatedAt: 0,
+        input: (activity.mode === 'activity' ? activity.sources : activity.rooms.map((room) => room.url)).join('\n'),
+        rooms: activity.rooms.map((room) => ({ ...roomLink(room.url), name: room.name }))
+      })) }))
+    }
     async function refresh(id, force = false) {
       const collection = await read(), snapshot = requireActivity(collection, id)
       if (!snapshot.rooms.length || (!force && snapshot.updatedAt && Date.now() - snapshot.updatedAt < 30000)) return collection
@@ -277,7 +329,7 @@
       }
       return read()
     }
-    return { read, save, rename, remove, refresh, refreshAll, preview: (input, mode) => preview(input, mode, fetcher) }
+    return { read, save, rename, remove, exportBackup, restoreBackup, refresh, refreshAll, preview: (input, mode) => preview(input, mode, fetcher) }
   }
-  globalThis.YuboTemporary = { KEY, LEGACY_KEY, MAX_ROOMS, MAX_ACTIVITIES, empty, roomLink, directRooms, pageRooms, activityRequest, preview, assignedObject, roomInfo, createController }
+  globalThis.YuboTemporary = { KEY, LEGACY_KEY, MAX_ROOMS, MAX_ACTIVITIES, empty, roomLink, directRooms, pageRooms, activityRequest, preview, assignedObject, roomInfo, normalizeBackup, readBackup, createController }
 })()

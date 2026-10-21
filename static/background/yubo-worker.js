@@ -7,7 +7,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   ;(async () => {
     let value
     if (message.action === 'preview') value = await temporaryList.preview(message.input, message.mode)
-    else if (message.action === 'read') value = await temporaryList.read()
+    else if (message.action === 'read') {
+      value = await temporaryList.read()
+      if (message.backupCapabilities) value = { ...value, backupProtocol: 1 }
+    }
+    else if (message.action === 'export-backup') value = await temporaryList.exportBackup()
+    else if (message.action === 'restore-backup') value = await temporaryList.restoreBackup(message.backup)
     else if (message.action === 'save') {
       value = await temporaryList.save(message)
       const id = message.id || value.activities.at(-1).id

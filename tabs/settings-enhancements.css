@@ -88,3 +88,4 @@
 .meta-alias-input-row button{flex:none}
 @media(max-width:760px){.streamer-manage-item{grid-template-columns:22px minmax(0,1fr);gap:7px}.streamer-controls{grid-column:2;justify-content:flex-start}.streamer-controls select{flex:1 1 120px;max-width:none}}
 @media(max-width:520px){.webdav-fields{grid-template-columns:1fr}.webdav-fields>label:first-child{grid-column:auto}.webdav-actions .dialog-cancel{margin-left:0}}
+#reload-backup-runtime[hidden]{display:none}
