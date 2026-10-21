@@ -1,0 +1,9 @@
+{
+  "uid": "huya-fixture",
+  "nick": "虎牙测试主播",
+  "privateHost": "test-room",
+  "isLive": true,
+  "gameName": "DOTA2",
+  "intro": "回来开工",
+  "profileRoom": 660000
+}

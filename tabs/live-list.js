@@ -422,15 +422,17 @@ zuo 做作坐左
     huya:(query)=>'https://www.huya.com/search?hsk='+encodeURIComponent(query),
     bilibili:(query)=>'https://search.bilibili.com/all?keyword='+encodeURIComponent(query)
   }
-  const state={rooms:[],diagnostics:{},favorites:[],order:[],groups:{},groupNames:[],settings:{},streamerMeta:{},enabledPlatforms:Object.keys(names),filter:'all',liveCardMode:false,platform:'all',group:'all',query:'',refreshing:false,authNoticeDismissed:false}
+  const state={rooms:[],diagnostics:{},favorites:[],order:[],groups:{},groupNames:[],settings:{},streamerMeta:{},enabledPlatforms:Object.keys(names),filter:'all',liveCardMode:false,platform:'all',group:'all',query:'',refreshing:false,authNoticeDismissed:false,temporary:YuboTemporary.empty(),temporaryOnlyLive:false,temporaryMessage:''}
   let timer,searchComposing=false
   document.addEventListener('click',(e)=>{
+    if(document.querySelector('dialog[open]'))return
     if(!state.query)return
     const target=e.target instanceof Element?e.target:null
     if(target&&target.closest('input,textarea,select,button,a,[contenteditable="true"],[contenteditable=""],.row'))return
     state.query='';render()
   })
   document.addEventListener('keydown',(e)=>{
+    if(document.querySelector('dialog[open]'))return
     if(e.key==='Escape'){
       if(!e.isComposing&&!searchComposing&&state.query){e.preventDefault();state.query='';render()}
       return
@@ -439,9 +441,9 @@ zuo 做作坐左
     if(e.ctrlKey||e.metaKey||e.altKey||e.isComposing||searchComposing)return
     const targetIsFilterTab=!!(target&&target.closest('.filter-tab'))
     if(target&&target.closest('input,textarea,select,[contenteditable="true"],[contenteditable=""]'))return
-    if(target&&!targetIsFilterTab&&target.closest('button,a'))return
+    if(target&&!targetIsFilterTab&&!target.closest('#live-view-toggle')&&target.closest('button,a'))return
     if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
-      const tabs=[{filter:'all',group:'all'},{filter:'live',group:'all'},{filter:'favorites',group:'all'},...state.groupNames.map((group)=>({filter:'favorites',group}))]
+      const tabs=[{filter:'all',group:'all'},{filter:'live',group:'all'},{filter:'favorites',group:'all'},...state.groupNames.map((group)=>({filter:'favorites',group})),...state.temporary.activities.map((activity)=>({filter:'temporary',group:activity.id}))]
       const current=tabs.findIndex((tab)=>tab.filter===state.filter&&tab.group===state.group)
       const index=current<0?0:(current+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length
       e.preventDefault()
@@ -455,7 +457,8 @@ zuo 做作坐左
       if(search){search.focus();search.select()}
       return
     }
-    if(e.key.toLowerCase()==='r'){e.preventDefault();void refresh();return}
+    if(e.key.toLowerCase()==='v'){if(!e.repeat){e.preventDefault();state.liveCardMode=!state.liveCardMode;render()}return}
+    if(e.key.toLowerCase()==='r'){e.preventDefault();void refresh({force:true});return}
     const filterByKey={'1':'all','2':'live','3':'favorites'}
     if(filterByKey[e.key]){state.filter=filterByKey[e.key];state.group='all';render();return}
     if(e.key==='?'){e.preventDefault();location.href='shortcuts.html'}
@@ -465,35 +468,40 @@ zuo 做作坐左
   const decode=(x)=>{if(typeof x!=='string')return x;try{return JSON.parse(x)}catch{return x}}
   const esc=(x)=>String(x==null?'':x).replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c])
   const time=(x)=>x?new Date(x).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'—'
+  const currentActivity=()=>state.temporary.activities.find((activity)=>activity.id===state.group)
   class AuthError extends Error{constructor(id){super((names[id]||id)+'登录已失效');this.platform=id;this.authRequired=true}}
   async function enabled(){const x=decode(await get(sync,'enabled_platforms'));return Array.isArray(x)?[...new Set(x.filter((id)=>names[id]))]:Object.keys(names)}
   async function fetchPlatform(id){
     if(id==='bilibili'){
       const r=await fetch('https://api.live.bilibili.com/xlive/web-ucenter/user/following?page=1&page_size=50&ignoreRecord=0&hit_ab=true',{credentials:'include'}),j=await r.json()
       if(Number(j.code)===-101||/账号未登录|未登录|登录失效/.test((j.message||'')+' '+(j.msg||'')))throw new AuthError(id)
-      return (j.data&&j.data.list||[]).map((x)=>({id:'bili_'+x.roomid,platform:id,name:x.uname,avatar:x.face,cover:x.room_cover,title:x.title||'',category:x.area_name_v2||'直播',live:x.live_status===1,url:'https://live.bilibili.com/'+x.roomid}))
+      return (j.data&&j.data.list||[]).map((x)=>({id:'bili_'+x.roomid,platform:id,name:x.uname,avatar:x.face,cover:x.room_cover,title:YuboRoomData.titleFor('bilibili',x),category:x.area_name_v2||'直播',live:x.live_status===1,url:'https://live.bilibili.com/'+x.roomid}))
     }
     if(id==='douyu'){
       const r=await fetch('https://www.douyu.com/wgapi/livenc/liveweb/follow/list',{credentials:'include'}),j=await r.json()
       const authCode=[j.code,j.error,j.errno].some((value)=>[-1,401,403].includes(Number(value))),message=[j.msg,j.message,j.errorMsg,j.error_msg].filter(Boolean).join(' ')
       if(authCode||/未登录|请登录|登录失效|未授权|unauthori[sz]ed|login required/i.test(message))throw new AuthError(id)
-      return (j.data&&j.data.list||[]).map((x)=>({id:'dy_'+x.room_id,platform:id,name:x.nickname,avatar:x.avatar_small,cover:x.room_src,title:x.room_name||x.title||'',category:x.game_name||'直播',live:x.show_status==1&&x.videoLoop==0,url:'https://www.douyu.com'+x.url}))
+      return (j.data&&j.data.list||[]).map((x)=>({id:'dy_'+x.room_id,platform:id,name:x.nickname,avatar:x.avatar_small,cover:x.room_src,title:YuboRoomData.titleFor('douyu',x),category:x.game_name||'直播',live:x.show_status==1&&x.videoLoop==0,url:'https://www.douyu.com'+x.url}))
     }
     if(id==='huya'){
       const l=await fetch('https://www.huya.com/udb_web/checkLogin.php',{credentials:'include'}).then((r)=>r.json())
       if(![true,1,'1','true'].includes(l.isLogined))throw new AuthError(id)
       const j=await fetch('https://fw.huya.com/dispatch?do=subscribeList&uid='+encodeURIComponent(l.uid),{credentials:'include'}).then((r)=>r.json())
-      return (j.result&&j.result.list||[]).map((x)=>({id:'huya_'+x.uid,platform:id,name:x.nick,avatar:x.avatar180,cover:x.screenshot,title:x.roomName||x.room_name||x.title||x.liveTitle||'',category:x.gameName||'直播',live:!!x.isLive,url:'https://www.huya.com/'+x.profileRoom}))
+      if(Number(j.status)===1401||/未登录|请登录|登录失效/.test(String(j.message||j.msg||'')))throw new AuthError(id)
+      if(!Array.isArray(j.result?.list))throw new Error('虎牙关注列表返回格式异常')
+      return (j.result&&j.result.list||[]).map((x)=>({id:'huya_'+x.uid,platform:id,name:x.nick,avatar:x.avatar180,cover:x.screenshot,title:YuboRoomData.titleFor('huya',x),category:x.gameName||'直播',live:!!x.isLive,url:'https://www.huya.com/'+x.profileRoom}))
     }
     return []
   }
   const roomNo=(url)=>String(url||'').match(/([0-9]+)\/?(?:[?#].*)?$/)?.[1]||''
   async function loadSaved(){
-    const v=await Promise.all([get(sync,'favorite_streamers'),get(local,'yubo_favorite_order'),get(local,'yubo_favorite_groups'),get(local,'yubo_favorite_group_names'),get(local,'yubo_settings'),get(local,'yubo_platform_diagnostics'),get(local,'yubo_last_rooms'),get(local,'yubo_last_refresh_at'),get(local,'yubo_streamer_meta'),get(sync,'enabled_platforms')])
+    const v=await Promise.all([get(sync,'favorite_streamers'),get(local,'yubo_favorite_order'),get(local,'yubo_favorite_groups'),get(local,'yubo_favorite_group_names'),get(local,'yubo_settings'),get(local,'yubo_platform_diagnostics'),get(local,'yubo_last_rooms'),get(local,'yubo_last_refresh_at'),get(local,'yubo_streamer_meta'),get(sync,'enabled_platforms'),get(local,YuboTemporary.KEY)])
     const f=decode(v[0]),savedPlatforms=decode(v[9]);state.favorites=Array.isArray(f)?f:[];state.order=Array.isArray(v[1])?v[1]:[];state.groups=v[2]||{};state.groupNames=Array.isArray(v[3])?v[3]:['常看'];state.settings=v[4]||{};state.enabledPlatforms=Array.isArray(savedPlatforms)?[...new Set(savedPlatforms.filter((id)=>names[id]))]:Object.keys(names);state.diagnostics=Object.fromEntries(Object.entries(v[5]||{}).filter(([id])=>state.enabledPlatforms.includes(id)));state.rooms=Array.isArray(v[6])?v[6].filter((room)=>names[room.platform]&&state.enabledPlatforms.includes(room.platform)):[];state.updated=v[7]||0;state.streamerMeta=v[8]||{}
+    state.temporary=v[10]&&Array.isArray(v[10].activities)?v[10]:await YuboTemporaryUI.request('read')
   }
   function visible(){
     const q=state.query.trim(),order=new Map(state.order.map((id,i)=>[id,i]))
+    if(state.filter==='temporary')return [...(currentActivity()?.rooms||[])].sort((a,b)=>Number(!!(b.statusKnown&&!b.stale&&b.live))-Number(!!(a.statusKnown&&!a.stale&&a.live))||String(a.name).localeCompare(String(b.name),'zh-CN')).filter((r)=>(state.platform==='all'||state.platform===r.platform)&&(!(state.temporaryOnlyLive||state.liveCardMode)||(r.statusKnown&&!r.stale&&r.live))&&(!q||[r.name,r.title,r.category,r.roomKey,r.url,names[r.platform]].some((x)=>matchesSearch(x,q))))
     return [...state.rooms].sort((a,b)=>{
       const favA=state.favorites.includes(a.id),favB=state.favorites.includes(b.id)
       if(favA!==favB)return Number(favB)-Number(favA)
@@ -501,6 +509,7 @@ zuo 做作坐左
       if(favA){const position=(order.get(a.id)??state.favorites.indexOf(a.id))-(order.get(b.id)??state.favorites.indexOf(b.id));if(position)return position}
       return String(a.name).localeCompare(String(b.name),'zh-CN')
     }).filter((r)=>{
+      if(state.liveCardMode&&(!r.live||r.stale))return false
       if(state.filter==='live'&&!r.live)return false
       if(state.filter==='favorites'&&!state.favorites.includes(r.id))return false
       if(state.platform!=='all'&&state.platform!==r.platform)return false
@@ -509,38 +518,90 @@ zuo 做作坐左
       return !q||[r.name,r.category,r.id,r.url,names[r.platform],state.groups[r.id],...metaAliases(meta)].some((x)=>matchesSearch(x,q))
     })
   }
+  const titleEntityDecoder=document.createElement('textarea')
+  function displayRoomTitle(value){
+    let text=String(value||'')
+    // Decode entity tokens only, never parse the platform's title as HTML.
+    // A small depth limit handles double-encoded API responses without a loop.
+    for(let depth=0;depth<3;depth++){
+      const decoded=text.replace(/&(?:#[xX][\da-fA-F]{1,8}|#\d{1,10}|[a-zA-Z][a-zA-Z\d]{1,40});/g,(entity)=>{
+        titleEntityDecoder.innerHTML=entity
+        return titleEntityDecoder.value
+      })
+      if(decoded===text)break
+      text=decoded
+    }
+    return text.replace(/\u00a0/g,' ').trim()
+  }
+  function roomHeading(r, staleLabel) {
+    const title=displayRoomTitle(r.title)
+    const tooltip=(r.titleStale?'上次标题（本次接口未返回）：':'')+title
+    return '<span class="name-line '+(title?'has-room-title':'')+'"><span class="name">'+esc(r.name)+(r.stale?'<small class="stale-label">'+esc(staleLabel)+'</small>':'')+'</span>'+(title?'<span class="room-title" title="'+esc(tooltip)+'"><span class="room-title-text">'+esc(title)+'</span></span>':'')+'</span>'
+  }
+  function measureRoomTitle(title) {
+    if(!title?.isConnected)return
+    const text=title.querySelector('.room-title-text'),distance=Math.max(0,text.scrollWidth-title.clientWidth)
+    title.classList.toggle('is-scrolling',distance>1)
+    title.style.setProperty('--title-travel',(-distance)+'px')
+    title.style.setProperty('--title-duration',Math.max(6,distance/28+3)+'s')
+  }
+  const roomTitleObserver=new ResizeObserver((entries)=>{
+    for(const entry of entries)measureRoomTitle(entry.target.closest('.room-title'))
+  })
+  function observeRoomTitles(){
+    roomTitleObserver.disconnect()
+    app.querySelectorAll('.room-title').forEach((title)=>{
+      measureRoomTitle(title);roomTitleObserver.observe(title);roomTitleObserver.observe(title.firstElementChild)
+    })
+  }
   function card(r){
-    const fav=state.favorites.includes(r.id),num=roomNo(r.url),meta=state.streamerMeta[r.id]||{},aliases=metaAliases(meta),alias=aliases.map((value)=>'<span class="alias-tag" title="'+esc(value)+'"><span class="alias-text">'+esc(value)+'</span></span>').join(''),cover=r.live&&r.cover?'<span class="hover-cover"><img src="'+esc(r.cover)+'" alt="'+esc(r.name)+'直播封面"></span>':''
+    const isActivity=state.filter==='temporary'
+    if(isActivity)r={...r,live:!!(r.live&&r.statusKnown&&!r.stale),stale:!r.statusKnown||r.stale,avatar:r.avatar||chrome.runtime.getURL('icon-fish-48.png')}
+    const fav=!isActivity&&state.favorites.includes(r.id),num=roomNo(r.url),meta=isActivity?{}:state.streamerMeta[r.id]||{},aliases=metaAliases(meta),alias=aliases.map((value)=>'<span class="alias-tag" title="'+esc(value)+'"><span class="alias-text">'+esc(value)+'</span></span>').join(''),cover=r.live&&r.cover?'<span class="hover-cover"><img src="'+esc(r.cover)+'" alt="'+esc(r.name)+'直播封面"></span>':''
     const platform=platformIcons[r.platform]?r.platform:'bilibili'
-    if(state.filter==='live'&&state.liveCardMode){
-      const title=String(r.title||'').trim()||('直播中 · '+String(r.category||'直播'))
+    if(state.liveCardMode){
+
       const background=r.cover?'<img src="'+esc(r.cover)+'" alt="" loading="lazy">':'<span class="live-card-no-cover">直播封面暂不可用</span>'
       return '<div class="row live-card '+(fav?'favorite ':'')+(r.stale?'stale':'')+'">'+
         '<a class="stream-link live-card-link" href="'+esc(r.url)+'" target="_blank" rel="noopener noreferrer">'+
           '<span class="live-card-background">'+background+'</span>'+
-          '<span class="live-card-info"><img class="avatar" src="'+esc(r.avatar||'')+'" alt=""><span class="live-card-text"><span class="name">'+esc(r.name)+(r.stale?'<small class="stale-label">暂用缓存</small>':'')+'</span><span class="live-title" title="'+esc(title)+'">'+esc(title)+'</span></span></span>'+
-        '</a><button class="star '+(fav?'selected':'')+'" data-star="'+esc(r.id)+'" title="'+(fav?'取消收藏':'收藏')+'" aria-label="'+(fav?'取消收藏':'收藏')+' '+esc(r.name)+'"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></button></div>'
+          '<span class="live-card-info"><img class="avatar" src="'+esc(r.avatar||'')+'" alt=""><span class="live-card-text">'+roomHeading(r,'暂用缓存')+'</span></span>'+
+        '</a>'+(isActivity?'':'<button class="star '+(fav?'selected':'')+'" data-star="'+esc(r.id)+'" title="'+(fav?'取消收藏':'收藏')+'" aria-label="'+(fav?'取消收藏':'收藏')+' '+esc(r.name)+'"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></button>')+'</div>'
     }
-    return '<div class="row '+(r.live?'live ':'')+(fav?'favorite ':'')+(r.stale?'stale':'')+'"><a class="stream-link" href="'+esc(r.url)+'" target="_blank" rel="noopener noreferrer"><span class="tv platform-'+platform+'">'+platformIcons[platform]+'</span><img class="avatar" src="'+esc(r.avatar||'')+'" alt=""><span class="info"><span class="name">'+esc(r.name)+(r.stale?'<small class="stale-label">暂用缓存</small>':'')+'</span><span class="tags"><span class="area">'+esc(r.category||'直播')+'</span>'+(num?'<span class="room">'+esc(num)+'</span>':'')+alias+'</span></span>'+cover+'</a><button class="star '+(fav?'selected':'')+'" data-star="'+esc(r.id)+'" title="'+(fav?'取消收藏':'收藏')+'" aria-label="'+(fav?'取消收藏':'收藏')+' '+esc(r.name)+'"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></button></div>'
+    return '<div class="row '+(r.live?'live ':'')+(fav?'favorite ':'')+(r.stale?'stale':'')+'"><a class="stream-link" href="'+esc(r.url)+'" target="_blank" rel="noopener noreferrer"><span class="tv platform-'+platform+'">'+platformIcons[platform]+'</span><img class="avatar" src="'+esc(r.avatar||'')+'" alt=""><span class="info">'+roomHeading(r,isActivity?'状态未知':'暂用缓存')+'<span class="tags"><span class="area">'+esc(r.category||'直播')+'</span>'+(num?'<span class="room">'+esc(num)+'</span>':'')+alias+'</span></span>'+cover+'</a>'+(isActivity?'':'<button class="star '+(fav?'selected':'')+'" data-star="'+esc(r.id)+'" title="'+(fav?'取消收藏':'收藏')+'" aria-label="'+(fav?'取消收藏':'收藏')+' '+esc(r.name)+'"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></button>')+'</div>'
   }
   function render(){
-    const list=visible(),live=state.rooms.filter((r)=>r.live).length,fav=state.rooms.filter((r)=>state.favorites.includes(r.id)).length
-    const auth=Object.entries(state.diagnostics).filter(([id,v])=>state.enabledPlatforms.includes(id)&&v.authRequired),failed=Object.entries(state.diagnostics).filter(([id,v])=>state.enabledPlatforms.includes(id)&&!v.ok&&!v.authRequired)
-    const platforms=Object.entries(names).filter(([id])=>state.enabledPlatforms.includes(id))
+    if(state.filter==='temporary'&&!currentActivity()){state.filter='all';state.group='all'}
+    const isTemporary=state.filter==='temporary',activity=currentActivity(),source=isTemporary?activity.rooms:state.rooms
+    const list=visible(),live=source.filter((r)=>r.live&&(!isTemporary||(r.statusKnown&&!r.stale))).length,mainLive=state.rooms.filter((r)=>r.live).length,fav=state.rooms.filter((r)=>state.favorites.includes(r.id)).length
+    const auth=isTemporary?[]:Object.entries(state.diagnostics).filter(([id,v])=>state.enabledPlatforms.includes(id)&&v.authRequired),failed=isTemporary?[]:Object.entries(state.diagnostics).filter(([id,v])=>state.enabledPlatforms.includes(id)&&!v.ok&&!v.authRequired)
+    const platforms=Object.entries(names).filter(([id])=>isTemporary||state.enabledPlatforms.includes(id))
     const focused=document.activeElement&&document.activeElement.id==='search',cursor=focused?document.activeElement.selectionStart:null
+    const previousTabs=app.querySelector('.filter-tabs'),previousActive=previousTabs?.querySelector('.active')
+    const tabsScroll=previousTabs?.scrollLeft||0,previousTabKey=JSON.stringify(previousActive?.dataset||{})
     const platformOptions=platforms.map(([id,n])=>'<option value="'+id+'" '+(state.platform===id?'selected':'')+'>'+esc(n)+'</option>').join('')
     const groupTabs=state.groupNames.map((n)=>{
       const count=state.favorites.filter((id)=>state.groups[id]===n).length,active=state.filter==='favorites'&&state.group===n
       return '<button data-group-tab="'+esc(n)+'" class="filter-tab group-tab '+(active?'active':'')+'">'+esc(n)+' <span>'+count+'</span></button>'
-    }).join('')
+    }).join('')+state.temporary.activities.map((item)=>'<button data-activity-tab="'+esc(item.id)+'" class="filter-tab '+(isTemporary&&item.id===state.group?'active':'')+'">'+esc(item.name)+' <span>'+item.rooms.length+'</span></button>').join('')
     const emptySearch=state.query.trim()?'<div class="empty-search"><span>是否到平台搜索“'+esc(state.query.trim())+'”？</span><div class="empty-search-actions"><button type="button" class="empty-search-button" data-platform-search="douyu">搜索斗鱼</button><button type="button" class="empty-search-button" data-platform-search="huya">搜索虎牙</button><button type="button" class="empty-search-button" data-platform-search="bilibili">搜索 B 站</button></div></div>':''
     const health=platforms.map(([id,n])=>{const x=state.diagnostics[id],cls=x&&x.ok?'ok':x&&x.authRequired?'auth':x?'failed':'unknown',label=x&&x.ok?x.count+' 位':x&&x.authRequired?'需登录':x?'读取失败':'',action=x&&x.authRequired?'<button type="button" class="health-auth-button" data-auth="'+esc(id)+'">重新授权</button>':'';return '<span class="health-item '+cls+'"><i></i>'+esc(n)+(label?' · '+esc(label):'')+action+'</span>'}).join('')
     const authMarkup=auth.length&&!state.authNoticeDismissed?'<section class="auth-notices"><div class="auth-notice-heading"><strong>平台授权需要恢复</strong><button type="button" class="auth-dismiss" id="dismiss-auth-notices" title="暂时关闭提示" aria-label="暂时关闭平台授权提示">×</button></div>'+auth.map(([id])=>'<div class="auth-notice"><span>'+esc(names[id]||id)+'登录已失效</span><div class="auth-notice-actions"><button class="auth-button" data-auth="'+esc(id)+'">重新授权</button></div></div>').join('')+'</section>':''
     const failedMarkup=failed.length?'<div class="load-notice">'+failed.map(([id])=>esc(names[id]||id)).join('、')+'暂时读取失败；保留上次数据并稍后重试。</div>':''
-    app.innerHTML='<header class="top"><div class="brand"><span class="title">鱼播</span><span class="subtitle">关注列表</span></div><div class="top-meta"><span class="count">'+live+' 正在直播 · '+state.rooms.length+' 位关注</span><span class="updated">更新于 '+esc(time(state.updated))+'</span></div><div class="top-actions"><button class="tool-button" id="refresh" '+(state.refreshing?'disabled':'')+'>'+(state.refreshing?'更新中…':'↻ 刷新')+'</button><nav class="site-nav" aria-label="页面导航"><a class="tool-button nav-link active" href="index.html" aria-current="page">关注列表</a><a class="tool-button nav-link" href="history.html">直播记录</a><a class="tool-button nav-link" href="shortcuts.html">快捷键</a><a class="tool-button nav-link" href="settings.html">设置</a></nav></div></header>'+
-      '<section class="toolbar"><div class="filter-tabs"><button data-filter="all" class="filter-tab '+(state.filter==='all'?'active':'')+'">全部 <span>'+state.rooms.length+'</span></button><button data-filter="live" class="filter-tab '+(state.filter==='live'?'active':'')+'">正在直播 <span>'+live+'</span></button><button data-filter="favorites" class="filter-tab '+(state.filter==='favorites'&&state.group==='all'?'active':'')+'">收藏 <span>'+fav+'</span></button>'+groupTabs+'</div><input id="search" class="search" type="search" placeholder="支持中文、拼音、首字母、房间号" value="'+esc(state.query)+'"><select id="platform-filter" class="select-filter"><option value="all">全部平台</option>'+platformOptions+'</select>'+(state.filter==='live'?'<button id="live-view-toggle" class="tool-button live-view-toggle '+(state.liveCardMode?'active':'')+'" type="button">'+(state.liveCardMode?'切回原样':'封面模式')+'</button>':'')+'</section>'+
-      '<section class="platform-health">'+health+'<a class="diagnostics-link" href="settings.html#diagnostics">诊断详情</a></section>'+authMarkup+failedMarkup+'<section class="rows '+(state.filter==='live'&&state.liveCardMode?'live-view':'')+'">'+(list.length?list.map(card).join(''):'<div class="empty"><div>'+(state.rooms.length?'没有符合条件的主播':state.enabledPlatforms.length?'暂无关注主播':'尚未启用平台，请前往设置启用')+'</div>'+emptySearch+'</div>')+'</section>'
+    const unknown=isTemporary?source.filter((r)=>!r.statusKnown||r.stale).length:0
+    const temporaryStatus=state.temporaryMessage||(isTemporary?(activity.updatedAt?(unknown?unknown+' 位状态未知':'状态已更新'):'正在检测开播状态…'):'')
+    app.innerHTML='<header class="top"><div class="brand"><span class="title">鱼播</span><span class="subtitle">'+(isTemporary?esc(activity.name):'关注列表')+'</span></div><div class="top-meta"><span class="count">'+live+' 正在直播 · '+source.length+' 位'+(isTemporary?'临时主播':'关注')+'</span><span class="updated">更新于 '+esc(time(isTemporary?activity.updatedAt:state.updated))+'</span></div><div class="top-actions"><button class="tool-button" id="refresh" '+(state.refreshing?'disabled':'')+'>'+(state.refreshing?'更新中…':'↻ 刷新')+'</button><nav class="site-nav" aria-label="页面导航"><a class="tool-button nav-link active" href="index.html" aria-current="page">关注列表</a><a class="tool-button nav-link" href="history.html">直播记录</a><a class="tool-button nav-link" href="shortcuts.html">快捷键</a><a class="tool-button nav-link" href="settings.html">设置</a></nav></div></header>'+
+      '<section class="toolbar"><div class="filter-tabs"><button data-filter="all" class="filter-tab '+(state.filter==='all'?'active':'')+'">全部 <span>'+state.rooms.length+'</span></button><button data-filter="live" class="filter-tab '+(state.filter==='live'?'active':'')+'">正在直播 <span>'+mainLive+'</span></button><button data-filter="favorites" class="filter-tab '+(state.filter==='favorites'&&state.group==='all'?'active':'')+'">收藏 <span>'+fav+'</span></button>'+groupTabs+'</div><input id="search" class="search" type="search" placeholder="支持中文、拼音、首字母、房间号" value="'+esc(state.query)+'"><select id="platform-filter" class="select-filter"><option value="all">全部平台</option>'+platformOptions+'</select>'+'<button id="live-view-toggle" class="tool-button live-view-toggle '+(state.liveCardMode?'active':'')+'" type="button" title="切换封面模式（V）；仅显示当前标签的开播主播" aria-pressed="'+state.liveCardMode+'">'+(state.liveCardMode?'切回原样':'封面模式')+'</button>'+'</section>'+
+      '<section class="platform-health">'+(isTemporary?'<span role="status">'+esc(temporaryStatus)+'</span><label><input id="temporary-only-live" type="checkbox" '+((state.temporaryOnlyLive||state.liveCardMode)?'checked':'')+(state.liveCardMode?' disabled':'')+'>只看正在直播</label><a class="diagnostics-link" href="settings.html#temporary-activities">管理活动</a>':health+'<a class="diagnostics-link" href="settings.html#diagnostics">诊断详情</a>')+'</section>'+authMarkup+failedMarkup+'<section class="rows '+(state.liveCardMode?'live-view':'')+'">'+(list.length?list.map(card).join(''):'<div class="empty"><div>'+(state.liveCardMode?'当前标签没有符合条件的开播主播':isTemporary?'没有符合条件的活动主播':state.rooms.length?'没有符合条件的主播':state.enabledPlatforms.length?'暂无关注主播':'尚未启用平台，请前往设置启用')+'</div>'+(!isTemporary?emptySearch:'')+'</div>')+'</section>'
+    const nextTabs=app.querySelector('.filter-tabs'),nextActive=nextTabs.querySelector('.active')
+    nextTabs.scrollLeft=tabsScroll
+    if(nextActive&&previousTabKey!==JSON.stringify(nextActive.dataset)){
+      const bounds=nextTabs.getBoundingClientRect(),activeBounds=nextActive.getBoundingClientRect()
+      if(activeBounds.left<bounds.left)nextTabs.scrollLeft-=bounds.left-activeBounds.left+3
+      else if(activeBounds.right>bounds.right)nextTabs.scrollLeft+=activeBounds.right-bounds.right+3
+    }
     if(focused){const input=document.getElementById('search');input.focus();const position=Math.min(cursor,input.value.length);input.setSelectionRange(position,position)}
+    observeRoomTitles()
     app.querySelectorAll('[data-filter]').forEach((b)=>b.addEventListener('click',()=>{state.filter=b.dataset.filter;state.group='all';render()}))
     app.querySelectorAll('[data-group-tab]').forEach((b)=>b.addEventListener('click',()=>{state.filter='favorites';state.group=b.dataset.groupTab;render()}))
     const search=document.getElementById('search')
@@ -554,7 +615,9 @@ zuo 做作坐左
     document.getElementById('platform-filter').addEventListener('change',(e)=>{state.platform=e.target.value;render()})
     const liveViewToggle=document.getElementById('live-view-toggle')
     if(liveViewToggle)liveViewToggle.addEventListener('click',()=>{state.liveCardMode=!state.liveCardMode;render()})
-    document.getElementById('refresh').addEventListener('click',refresh)
+    document.getElementById('refresh').addEventListener('click',()=>void refresh({force:true}))
+    app.querySelectorAll('[data-activity-tab]').forEach((button)=>button.addEventListener('click',()=>{state.filter='temporary';state.group=button.dataset.activityTab;state.temporaryMessage='';render()}))
+    document.getElementById('temporary-only-live')?.addEventListener('change',(event)=>{state.temporaryOnlyLive=event.target.checked;render()})
     const dismissAuth=document.getElementById('dismiss-auth-notices')
     if(dismissAuth)dismissAuth.addEventListener('click',()=>{state.authNoticeDismissed=true;render()})
     app.querySelectorAll('[data-star]').forEach((b)=>b.addEventListener('click',async()=>{
@@ -574,9 +637,14 @@ zuo 做作坐左
       chrome.tabs.create({url:login[id]||login.bilibili})
     }))
   }
-  async function refresh(){
+  async function refresh(options={}){
     if(state.refreshing)return
     state.refreshing=true;render()
+    if(state.filter==='temporary'){
+      try{state.temporary=await YuboTemporaryUI.request('refresh',{id:state.group,force:options.force===true});state.temporaryMessage=''}catch(error){state.temporaryMessage=error.message}
+      finally{state.refreshing=false;render();void schedule()}
+      return
+    }
     const ids=await enabled();state.enabledPlatforms=ids
     const old=[...state.rooms],results=await Promise.allSettled(ids.map(fetchPlatform)),rooms=[],diagnostics=Object.fromEntries(Object.entries(state.diagnostics).filter(([id])=>ids.includes(id)))
     results.forEach((result,i)=>{
@@ -584,20 +652,22 @@ zuo 做作坐左
       if(result.status==='fulfilled'){rooms.push(...result.value);diagnostics[id]={ok:true,authRequired:false,count:result.value.length,checkedAt:Date.now()}}
       else{const e=result.reason;diagnostics[id]={ok:false,authRequired:!!e.authRequired,error:String(e.message||'读取失败'),count:old.filter((r)=>r.platform===id).length,checkedAt:Date.now()};rooms.push(...old.filter((r)=>r.platform===id).map((r)=>({...r,stale:true})))}
     })
-    state.rooms=rooms;state.diagnostics=diagnostics;state.updated=Date.now()
-    await set(local,{yubo_last_rooms:rooms,yubo_platform_diagnostics:diagnostics,yubo_last_refresh_at:state.updated})
+    state.rooms=YuboRoomData.mergeTitles(rooms,old);state.diagnostics=diagnostics;state.updated=Date.now()
+    await set(local,{yubo_last_rooms:state.rooms,yubo_platform_diagnostics:diagnostics,yubo_last_refresh_at:state.updated})
     state.refreshing=false;state.authNoticeDismissed=false;render();schedule()
   }
   async function schedule(){clearTimeout(timer);const n=Math.min(60,Math.max(1,Number(decode(await get(sync,'check_interval')))||3));timer=setTimeout(refresh,n*60000)}
   try{
-    document.title='鱼播 · 关注列表';await loadSaved();render();await refresh()
+    document.title='鱼播 · 关注列表';await loadSaved();render()
     chrome.storage.onChanged.addListener((c,area)=>{
+      if(area==='local'&&c[YuboTemporary.KEY]){const value=c[YuboTemporary.KEY].newValue;state.temporary=value&&Array.isArray(value.activities)?value:YuboTemporary.empty();state.temporaryMessage='';render()}
       if(area==='sync'&&c.enabled_platforms)void refresh()
       if(area==='sync'&&c.favorite_streamers){const v=decode(c.favorite_streamers.newValue);state.favorites=Array.isArray(v)?v:[];render()}
       if(area==='local'&&(c.yubo_favorite_order||c.yubo_favorite_groups||c.yubo_favorite_group_names||c.yubo_settings||c.yubo_streamer_meta))void loadSaved().then(render)
       if(area==='sync'&&c.check_interval)void schedule()
     })
     window.addEventListener('focus',()=>{if(Object.values(state.diagnostics).some((x)=>x.authRequired))void refresh()})
+    await refresh()
     schedule()
   }catch(e){app.innerHTML='<div class="error">读取关注列表失败，请确认已登录平台后刷新页面</div>';console.error(e)}
 })()

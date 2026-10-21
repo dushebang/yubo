@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="platform-settings.css">
   <link rel="stylesheet" href="settings-enhancements.css">
   <link rel="stylesheet" href="nav.css">
+  <link rel="stylesheet" href="temporary.css">
 </head>
 <body>
   <header class="top secondary-top">
@@ -50,6 +51,13 @@
       <p id="streamer-meta-status" class="streamer-meta-status" role="status" aria-live="polite"></p>
       <div id="streamer-list" class="streamer-list"></div>
     </section>
+    <section class="settings-card" id="temporary-activities">
+      <div class="section-title"><h2>临时活动 <span id="temporary-count"></span></h2><button class="secondary-button" id="temporary-add" type="button">添加活动</button></div>
+      <p class="hint temporary-support-note">仅支持斗鱼平台活动，且有一定几率识别失败。</p>
+      <details class="temporary-help"><summary>使用说明</summary><p class="hint">各活动独立显示在关注列表分组栏，仅保存在本机，不加入正式关注或通知。“更新名单”重新读取该活动来源并增删主播；“刷新状态”只检测现有主播是否开播。来源和检测时间可点击各行“详情”查看。</p></details>
+      <p id="temporary-manager-status" class="hint" role="status" aria-live="polite"></p>
+      <div id="temporary-activity-list" role="region" aria-label="临时活动管理列表" tabindex="0"></div>
+    </section>
     <section class="settings-card" id="diagnostics">
       <div class="section-title"><h2>平台诊断</h2><span>勾选后才检查该平台；未授权会提醒并提供重新授权，取消勾选后不检查也不提醒</span></div>
       <div id="diagnostics-list" class="diagnostics-list"></div>
@@ -88,6 +96,23 @@
     <p id="webdav-status" class="hint webdav-status" aria-live="polite"></p>
     <div class="webdav-actions"><button class="secondary-button" id="save-webdav" type="button">保存配置</button><button class="secondary-button" id="webdav-upload" type="button">上传当前配置</button><button class="primary-button" id="webdav-download" type="button">从 WebDAV 恢复</button><button class="dialog-cancel secondary-button" id="webdav-close" type="button">关闭</button></div>
   </dialog>
+  <dialog id="temporary-dialog" class="temporary-dialog" aria-labelledby="temporary-dialog-title">
+    <div class="temporary-dialog-heading"><h2 id="temporary-dialog-title">新增临时活动</h2><button type="button" id="temporary-close" class="tool-button" aria-label="关闭导入">关闭</button></div>
+    <p>各活动独立保存。更新名单只替换当前活动，不更改其他活动、正式关注或收藏。活动页解析仅支持斗鱼平台活动，且有一定几率识别失败；直播间链接列表仍可导入斗鱼、虎牙和 B 站。</p>
+    <label for="temporary-name">活动名称</label>
+    <input id="temporary-name" maxlength="24" placeholder="例如：户外活动、赛事嘉宾">
+    <label for="temporary-mode">导入方式</label>
+    <select id="temporary-mode"><option value="activity">斗鱼活动页链接：提取页面中的主播</option><option value="rooms">直播间链接列表：直接导入</option></select>
+    <label for="temporary-input">活动链接，或每行一个直播间链接</label>
+    <textarea id="temporary-input" rows="5" maxlength="1000000" placeholder="https://www.douyu.com/91124&#10;直接导入直播间时，请先切换为“直播间链接列表”"></textarea>
+    <label class="temporary-file-label">也可读取本机 txt / JSON / HTML 链接文件 <input id="temporary-file" type="file" accept=".txt,.json,.html,.htm"></label>
+    <div class="temporary-dialog-actions"><button id="temporary-parse" class="tool-button" type="button">解析并预览</button><button id="temporary-apply" class="tool-button" type="button" disabled>保存活动</button></div>
+    <p id="temporary-import-status" role="status" aria-live="polite"></p>
+    <div id="temporary-preview" class="temporary-preview"></div>
+  </dialog>
+  <script src="../static/temporary-list.js"></script>
+  <script src="temporary-ui.js"></script>
+  <script src="temporary-settings.js"></script>
   <script src="settings.js"></script>
 </body>
 </html>

@@ -1,0 +1,12 @@
+// Live public evidence only. This does NOT claim authenticated subscribeList verification.
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict')
+const fixture=JSON.parse(fs.readFileSync(0,'utf8').replace(/^\uFEFF/,'')),context=vm.createContext({URL,AbortSignal})
+for(const file of ['room-data.js','temporary-list.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../static',file),'utf8'),context)
+const room=context.YuboTemporary.assignedObject(fixture.roomHtml,'TT_ROOM_DATA')
+assert.ok(typeof room.introduction==='string'&&room.introduction.trim(),'Public room must contain introduction')
+assert.equal(context.YuboRoomData.titleFor('huya',room),room.introduction.trim())
+assert.match(fixture.followScript,/UserSubscribeToInfo=function\(\)\{[^}]*this\.sLiveDesc=/)
+assert.match(fixture.followScript,/n\.iIsLive[\s\S]{0,150}n\.sLiveDesc/)
+const guest=JSON.parse(fixture.guestResponse)
+assert.equal(Number(guest.status),1401)
+console.log(JSON.stringify({verifiedAt:new Date().toISOString(),publicRoom:{url:'https://www.huya.com/660000',titleField:'introduction',title:room.introduction},officialFollowSchema:{script:fixture.scriptUrl,titleField:'sLiveDesc'},guestStatus:guest.status,authenticatedSubscribeListVerified:false},null,2))

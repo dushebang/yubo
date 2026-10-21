@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "鱼播",
-  "version": "3.3.2",
+  "version": "3.4.0",
   "description": "多平台关注主播开播提醒",
   "icons": {
     "16": "icon-fish-16.png",
@@ -31,7 +31,8 @@
   "host_permissions": [
     "https://*.bilibili.com/*",
     "https://*.douyu.com/*",
-    "https://*.huya.com/*"
+    "https://*.huya.com/*",
+    "https://butterfly.douyucdn.cn/*"
   ],
   "optional_host_permissions": [
     "https://*/*",
