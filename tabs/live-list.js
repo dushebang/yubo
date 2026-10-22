@@ -422,8 +422,67 @@ zuo 做作坐左
     huya:(query)=>'https://www.huya.com/search?hsk='+encodeURIComponent(query),
     bilibili:(query)=>'https://search.bilibili.com/all?keyword='+encodeURIComponent(query)
   }
-  const state={rooms:[],diagnostics:{},favorites:[],order:[],groups:{},groupNames:[],settings:{},streamerMeta:{},enabledPlatforms:Object.keys(names),filter:'all',liveCardMode:false,platform:'all',group:'all',query:'',refreshing:false,authNoticeDismissed:false,temporary:YuboTemporary.empty(),temporaryOnlyLive:false,temporaryMessage:''}
-  let timer,searchComposing=false
+  const state={rooms:[],diagnostics:{},favorites:[],order:[],streamerOrder:[],groups:{},groupNames:[],settings:{},streamerMeta:{},enabledPlatforms:Object.keys(names),filter:'all',liveCardMode:false,platform:'all',group:'all',query:'',refreshing:false,authNoticeDismissed:false,temporary:YuboTemporary.empty(),temporaryOnlyLive:false,temporaryMessage:''}
+  const readLiveTimes=YuboRoomData.createTimeReader(local)
+  let timer,searchComposing=false,pendingActivityRefresh='',orderingBusy=false,orderNeedsReload=false
+  let coverTimer,coverReading=false,coverNextAt=0
+  const viewDetails=new Map()
+  const detailKey=room=>YuboRoomData.roomIdentity(room)?.key||room.platform+':'+room.url
+  const coverView=()=>state.liveCardMode&&!document.hidden
+  function currentRoomList(){
+    const activity=state.filter==='temporary'?currentActivity():null
+    return activity?{key:'activity:'+activity.id,rooms:activity.rooms,temporary:true}:{key:'official',rooms:state.rooms,temporary:false}
+  }
+  function withRoomDetails(rooms){
+    return rooms.map(room=>{
+      const details=viewDetails.get(detailKey(room))
+      if(!details||Date.now()-details.checkedAt>300000||!room.live||room.stale||room.statusKnown===false)return room
+      if(room.liveStartedAt&&details.liveStartedAt&&room.liveStartedAt!==details.liveStartedAt)return room
+      const cover=room.coverKind==='snapshot'?{}:{cover:details.cover,coverFallback:details.coverFallback,coverKind:details.coverKind}
+      return {...room,...cover,coverRetryAt:details.coverRetryAt,liveStartedAt:room.liveStartedAt||details.liveStartedAt}
+    })
+  }
+  function scheduleCoverFill(){
+    clearTimeout(coverTimer)
+    if(!coverView()||state.refreshing||coverReading)return
+    const missing=visible().filter(room=>room.live&&!room.stale&&room.statusKnown!==false&&room.coverKind!=='snapshot')
+    if(!missing.length)return
+    const earliest=Math.min(...missing.map(room=>Number(room.coverRetryAt)||0))
+    coverTimer=setTimeout(fillRoomCovers,Math.max(500,coverNextAt-Date.now(),earliest-Date.now()))
+  }
+  async function fillRoomCovers(){
+    if(!coverView()||state.refreshing||coverReading)return
+    const source=currentRoomList(),candidates=visible().filter(room=>room.live&&!room.stale&&room.statusKnown!==false&&room.coverKind!=='snapshot'&&!(room.coverRetryAt>Date.now())).slice(0,6)
+    if(!candidates.length){scheduleCoverFill();return}
+    coverReading=true;coverNextAt=Date.now()+30000
+    try{
+      const result=await readLiveTimes(candidates)
+      // List identity and source revision must still match; never write another tab's roster.
+      const current=currentRoomList()
+      if(current.key!==source.key||current.rooms!==source.rooms||!coverView())return
+      const updates=new Map(result.map(room=>[room.id,room]))
+      for(const room of result)viewDetails.set(detailKey(room),{cover:room.cover,coverFallback:room.coverFallback,coverKind:room.coverKind,coverRetryAt:room.coverRetryAt,liveStartedAt:room.liveStartedAt,checkedAt:Date.now()})
+      // Activity definitions remain worker-owned. Both sources use the same detail cache above.
+      if(!source.temporary){
+        state.rooms=source.rooms.map(room=>updates.has(room.id)?withRoomDetails([room])[0]:room)
+        await set(local,{yubo_last_rooms:state.rooms})
+      }
+      render()
+    }catch{ /* Keep current covers; retry through the same rate-limited reader. */ }
+    finally{coverReading=false;scheduleCoverFill()}
+  }
+  document.addEventListener('visibilitychange',scheduleCoverFill)
+  function activateActivity(id){
+    state.filter='temporary';state.group=id;state.temporaryMessage='';render()
+    if(state.refreshing)pendingActivityRefresh=id
+    else void refresh()
+  }
+  function finishRefresh(){
+    state.refreshing=false;render()
+    const pending=pendingActivityRefresh;pendingActivityRefresh=''
+    if(pending&&state.filter==='temporary'&&state.group===pending)void refresh()
+    else void schedule()
+  }
   document.addEventListener('click',(e)=>{
     if(document.querySelector('dialog[open]'))return
     if(!state.query)return
@@ -441,13 +500,14 @@ zuo 做作坐左
     if(e.ctrlKey||e.metaKey||e.altKey||e.isComposing||searchComposing)return
     const targetIsFilterTab=!!(target&&target.closest('.filter-tab'))
     if(target&&target.closest('input,textarea,select,[contenteditable="true"],[contenteditable=""]'))return
-    if(target&&!targetIsFilterTab&&!target.closest('#live-view-toggle')&&target.closest('button,a'))return
+    if(target&&!targetIsFilterTab&&!target.closest('#live-view-toggle,#room-sort')&&target.closest('button,a'))return
     if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
       const tabs=[{filter:'all',group:'all'},{filter:'live',group:'all'},{filter:'favorites',group:'all'},...state.groupNames.map((group)=>({filter:'favorites',group})),...state.temporary.activities.map((activity)=>({filter:'temporary',group:activity.id}))]
       const current=tabs.findIndex((tab)=>tab.filter===state.filter&&tab.group===state.group)
       const index=current<0?0:(current+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length
       e.preventDefault()
-      state.filter=tabs[index].filter;state.group=tabs[index].group;render()
+      if(tabs[index].filter==='temporary')activateActivity(tabs[index].group)
+      else{state.filter=tabs[index].filter;state.group=tabs[index].group;render()}
       const activeTab=document.querySelector('.filter-tab.active');if(activeTab)activeTab.focus()
       return
     }
@@ -458,6 +518,11 @@ zuo 做作坐左
       return
     }
     if(e.key.toLowerCase()==='v'){if(!e.repeat){e.preventDefault();state.liveCardMode=!state.liveCardMode;render()}return}
+    if(e.key.toLowerCase()==='s'){
+      if(state.filter==='temporary')return
+      if(!e.repeat){const modes=['default','newest','oldest'],index=modes.indexOf(YuboRoomData.sortMode(state.settings.liveSort));e.preventDefault();setRoomSort(modes[(index+1)%modes.length])}
+      return
+    }
     if(e.key.toLowerCase()==='r'){e.preventDefault();void refresh({force:true});return}
     const filterByKey={'1':'all','2':'live','3':'favorites'}
     if(filterByKey[e.key]){state.filter=filterByKey[e.key];state.group='all';render();return}
@@ -465,6 +530,7 @@ zuo 做作坐左
   })
   const get=(area,key)=>new Promise((resolve)=>area.get(key,(x)=>resolve(x[key])))
   const set=(area,values)=>new Promise((resolve)=>area.set(values,resolve))
+  function setRoomSort(mode){state.settings={...state.settings,liveSort:YuboRoomData.sortMode(mode)};render();void set(local,{yubo_settings:state.settings})}
   const decode=(x)=>{if(typeof x!=='string')return x;try{return JSON.parse(x)}catch{return x}}
   const esc=(x)=>String(x==null?'':x).replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c])
   const time=(x)=>x?new Date(x).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'—'
@@ -475,13 +541,13 @@ zuo 做作坐左
     if(id==='bilibili'){
       const r=await fetch('https://api.live.bilibili.com/xlive/web-ucenter/user/following?page=1&page_size=50&ignoreRecord=0&hit_ab=true',{credentials:'include'}),j=await r.json()
       if(Number(j.code)===-101||/账号未登录|未登录|登录失效/.test((j.message||'')+' '+(j.msg||'')))throw new AuthError(id)
-      return (j.data&&j.data.list||[]).map((x)=>({id:'bili_'+x.roomid,platform:id,name:x.uname,avatar:x.face,cover:x.room_cover,title:YuboRoomData.titleFor('bilibili',x),category:x.area_name_v2||'直播',live:x.live_status===1,url:'https://live.bilibili.com/'+x.roomid}))
+      return (j.data&&j.data.list||[]).map(x=>YuboRoomData.followRoom(id,x))
     }
     if(id==='douyu'){
       const r=await fetch('https://www.douyu.com/wgapi/livenc/liveweb/follow/list',{credentials:'include'}),j=await r.json()
       const authCode=[j.code,j.error,j.errno].some((value)=>[-1,401,403].includes(Number(value))),message=[j.msg,j.message,j.errorMsg,j.error_msg].filter(Boolean).join(' ')
       if(authCode||/未登录|请登录|登录失效|未授权|unauthori[sz]ed|login required/i.test(message))throw new AuthError(id)
-      return (j.data&&j.data.list||[]).map((x)=>({id:'dy_'+x.room_id,platform:id,name:x.nickname,avatar:x.avatar_small,cover:x.room_src,title:YuboRoomData.titleFor('douyu',x),category:x.game_name||'直播',live:x.show_status==1&&x.videoLoop==0,url:'https://www.douyu.com'+x.url}))
+      return (j.data&&j.data.list||[]).map(x=>YuboRoomData.followRoom(id,x))
     }
     if(id==='huya'){
       const l=await fetch('https://www.huya.com/udb_web/checkLogin.php',{credentials:'include'}).then((r)=>r.json())
@@ -489,33 +555,25 @@ zuo 做作坐左
       const j=await fetch('https://fw.huya.com/dispatch?do=subscribeList&uid='+encodeURIComponent(l.uid),{credentials:'include'}).then((r)=>r.json())
       if(Number(j.status)===1401||/未登录|请登录|登录失效/.test(String(j.message||j.msg||'')))throw new AuthError(id)
       if(!Array.isArray(j.result?.list))throw new Error('虎牙关注列表返回格式异常')
-      return (j.result&&j.result.list||[]).map((x)=>({id:'huya_'+x.uid,platform:id,name:x.nick,avatar:x.avatar180,cover:x.screenshot,title:YuboRoomData.titleFor('huya',x),category:x.gameName||'直播',live:!!x.isLive,url:'https://www.huya.com/'+x.profileRoom}))
+      return (j.result&&j.result.list||[]).map(x=>YuboRoomData.followRoom(id,x))
     }
     return []
   }
-  const roomNo=(url)=>String(url||'').match(/([0-9]+)\/?(?:[?#].*)?$/)?.[1]||''
   async function loadSaved(){
     const v=await Promise.all([get(sync,'favorite_streamers'),get(local,'yubo_favorite_order'),get(local,'yubo_favorite_groups'),get(local,'yubo_favorite_group_names'),get(local,'yubo_settings'),get(local,'yubo_platform_diagnostics'),get(local,'yubo_last_rooms'),get(local,'yubo_last_refresh_at'),get(local,'yubo_streamer_meta'),get(sync,'enabled_platforms'),get(local,YuboTemporary.KEY)])
     const f=decode(v[0]),savedPlatforms=decode(v[9]);state.favorites=Array.isArray(f)?f:[];state.order=Array.isArray(v[1])?v[1]:[];state.groups=v[2]||{};state.groupNames=Array.isArray(v[3])?v[3]:['常看'];state.settings=v[4]||{};state.enabledPlatforms=Array.isArray(savedPlatforms)?[...new Set(savedPlatforms.filter((id)=>names[id]))]:Object.keys(names);state.diagnostics=Object.fromEntries(Object.entries(v[5]||{}).filter(([id])=>state.enabledPlatforms.includes(id)));state.rooms=Array.isArray(v[6])?v[6].filter((room)=>names[room.platform]&&state.enabledPlatforms.includes(room.platform)):[];state.updated=v[7]||0;state.streamerMeta=v[8]||{}
     state.temporary=v[10]&&Array.isArray(v[10].activities)?v[10]:await YuboTemporaryUI.request('read')
+    const manual=await get(local,'yubo_streamer_order');state.streamerOrder=Array.isArray(manual)?manual:[]
   }
   function visible(){
-    const q=state.query.trim(),order=new Map(state.order.map((id,i)=>[id,i]))
-    if(state.filter==='temporary')return [...(currentActivity()?.rooms||[])].sort((a,b)=>Number(!!(b.statusKnown&&!b.stale&&b.live))-Number(!!(a.statusKnown&&!a.stale&&a.live))||String(a.name).localeCompare(String(b.name),'zh-CN')).filter((r)=>(state.platform==='all'||state.platform===r.platform)&&(!(state.temporaryOnlyLive||state.liveCardMode)||(r.statusKnown&&!r.stale&&r.live))&&(!q||[r.name,r.title,r.category,r.roomKey,r.url,names[r.platform]].some((x)=>matchesSearch(x,q))))
-    return [...state.rooms].sort((a,b)=>{
-      const favA=state.favorites.includes(a.id),favB=state.favorites.includes(b.id)
-      if(favA!==favB)return Number(favB)-Number(favA)
-      const live=Number(b.live)-Number(a.live);if(live)return live
-      if(favA){const position=(order.get(a.id)??state.favorites.indexOf(a.id))-(order.get(b.id)??state.favorites.indexOf(b.id));if(position)return position}
-      return String(a.name).localeCompare(String(b.name),'zh-CN')
-    }).filter((r)=>{
-      if(state.liveCardMode&&(!r.live||r.stale))return false
-      if(state.filter==='live'&&!r.live)return false
-      if(state.filter==='favorites'&&!state.favorites.includes(r.id))return false
-      if(state.platform!=='all'&&state.platform!==r.platform)return false
-      if(state.group!=='all'&&state.groups[r.id]!==state.group)return false
-      const meta=state.streamerMeta[r.id]||{}
-      return !q||[r.name,r.category,r.id,r.url,names[r.platform],state.groups[r.id],...metaAliases(meta)].some((x)=>matchesSearch(x,q))
+    const list=currentRoomList(),q=state.query.trim()
+    return YuboRoomData.selectCardRooms(withRoomDetails(list.rooms),{
+      temporary:list.temporary,favorites:state.favorites,favoriteOrder:state.order,streamerOrder:state.streamerOrder,
+      roomOrder:list.temporary?currentActivity()?.roomOrder:[],
+      mode:state.settings.liveSort,coverMode:state.liveCardMode,onlyLive:list.temporary&&state.temporaryOnlyLive,
+      filter:list.temporary?'all':state.filter,platform:state.platform,group:list.temporary?'all':state.group,groups:state.groups,
+      defaultAvatar:chrome.runtime.getURL('icon-fish-48.png'),aliases:room=>metaAliases(state.streamerMeta[room.id]||{}),
+      matches:q?room=>[room.name,room.title,room.category,room.displayRoomId,room.roomKey,room.id,room.url,names[room.platform],list.temporary?'':state.groups[room.id],...room.aliases].some(value=>matchesSearch(value,q)):null
     })
   }
   const titleEntityDecoder=document.createElement('textarea')
@@ -592,30 +650,66 @@ zuo 做作坐左
       link?.addEventListener('blur',hideRoomTitleTooltip)
       link?.addEventListener('click',hideRoomTitleTooltip)
     })
+    app.querySelectorAll('.live-duration').forEach((label)=>{
+      label.addEventListener('mouseenter',()=>showRoomTitleTooltip(label))
+      label.addEventListener('mouseleave',hideRoomTitleTooltip)
+      label.addEventListener('focus',()=>showRoomTitleTooltip(label))
+      label.addEventListener('blur',hideRoomTitleTooltip)
+    })
+    durationObserver.disconnect()
+    app.querySelectorAll('.meta-line').forEach((line)=>{measureDuration(line);durationObserver.observe(line)})
   }
-  function card(r){
-    const isActivity=state.filter==='temporary'
-    if(isActivity)r={...r,live:!!(r.live&&r.statusKnown&&!r.stale),stale:!r.statusKnown||r.stale,avatar:r.avatar||chrome.runtime.getURL('icon-fish-48.png')}
-    const fav=!isActivity&&state.favorites.includes(r.id),num=roomNo(r.url),meta=isActivity?{}:state.streamerMeta[r.id]||{},aliases=metaAliases(meta),alias=aliases.map((value)=>'<span class="alias-tag" title="'+esc(value)+'"><span class="alias-text">'+esc(value)+'</span></span>').join(''),cover=r.live&&r.cover?'<span class="hover-cover"><img src="'+esc(r.cover)+'" alt="'+esc(r.name)+'直播封面"></span>':''
-    const platform=platformIcons[r.platform]?r.platform:'bilibili'
-    if(state.liveCardMode){
-
-      const background=r.cover?'<img src="'+esc(r.cover)+'" alt="" loading="lazy">':'<span class="live-card-no-cover">直播封面暂不可用</span>'
-      return '<div class="row live-card '+(fav?'favorite ':'')+(r.stale?'stale':'')+'">'+
-        '<a class="stream-link live-card-link" href="'+esc(r.url)+'" target="_blank" rel="noopener noreferrer">'+
-          '<span class="live-card-background">'+background+'</span>'+
-          '<span class="live-card-info"><img class="avatar" src="'+esc(r.avatar||'')+'" alt=""><span class="live-card-text">'+roomHeading(r,'暂用缓存')+'</span></span>'+
-        '</a>'+(isActivity?'':'<button class="star '+(fav?'selected':'')+'" data-star="'+esc(r.id)+'" title="'+(fav?'取消收藏':'收藏')+'" aria-label="'+(fav?'取消收藏':'收藏')+' '+esc(r.name)+'"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></button>')+'</div>'
-    }
-    return '<div class="row '+(r.live?'live ':'')+(fav?'favorite ':'')+(r.stale?'stale':'')+'"><a class="stream-link" href="'+esc(r.url)+'" target="_blank" rel="noopener noreferrer"><span class="tv platform-'+platform+'">'+platformIcons[platform]+'</span><img class="avatar" src="'+esc(r.avatar||'')+'" alt=""><span class="info">'+roomHeading(r,isActivity?'状态未知':'暂用缓存')+'<span class="tags"><span class="area">'+esc(r.category||'直播')+'</span>'+(num?'<span class="room">'+esc(num)+'</span>':'')+alias+'</span></span>'+cover+'</a>'+(isActivity?'':'<button class="star '+(fav?'selected':'')+'" data-star="'+esc(r.id)+'" title="'+(fav?'取消收藏':'收藏')+'" aria-label="'+(fav?'取消收藏':'收藏')+' '+esc(r.name)+'"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></button>')+'</div>'
+  function durationMarkup(room){
+    const start=YuboRoomData.liveStart(room)
+    if(!start)return ''
+    const detail='平台开播时间：'+new Date(start).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})+'（北京时间）'
+    return '<span class="live-duration" tabindex="0" data-live-start="'+start+'" data-room-title="'+esc(detail)+'" aria-label="'+esc(detail)+'"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="M8 4.5V8l2.2 1.4" stroke-linecap="round"/></svg><span class="duration-text">'+esc(YuboRoomData.durationText(start))+'</span></span>'
   }
+  function measureDuration(line){
+    const label=line.querySelector('.live-duration'),tags=line.querySelector('.tags')
+    if(!label||!tags)return
+    if(!YuboRoomData.timestamp(Number(label.dataset.liveStart))){label.hidden=true;return}
+    label.hidden=false
+    label.hidden=tags.scrollWidth+label.offsetWidth+8>line.clientWidth+1
+  }
+  const durationObserver=new ResizeObserver((entries)=>entries.forEach((entry)=>measureDuration(entry.target)))
+  function updateDurations(){
+    app.querySelectorAll('[data-live-start]').forEach((label)=>{
+      const text=YuboRoomData.durationText(Number(label.dataset.liveStart))
+      label.querySelector('.duration-text').textContent=text
+      if(!text)label.hidden=true
+    })
+    app.querySelectorAll('.meta-line').forEach(measureDuration)
+  }
+  setInterval(()=>{if(!document.hidden)updateDurations()},60000)
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)updateDurations()})
+  function coverImage(room,lazy=true){
+    return '<img data-stream-cover data-cover-fallback="'+esc(room.coverFallback||'')+'" src="'+esc(room.cover)+'" alt="'+esc(room.name)+'直播预览"'+(lazy?' loading="lazy"':'')+'>'
+  }
+  function observeCoverImages(){
+    app.querySelectorAll('img[data-stream-cover]').forEach((img)=>{
+      const fallback=()=>{
+        const next=img.dataset.coverFallback;img.dataset.coverFallback=''
+        if(next&&next!==img.getAttribute('src')){img.src=next;return}
+        const parent=img.parentElement
+        if(parent?.classList.contains('live-card-background')){const empty=document.createElement('span');empty.className='live-card-no-cover';empty.textContent='直播预览暂不可用';parent.replaceChildren(empty)}
+        else if(parent?.classList.contains('hover-cover'))parent.hidden=true
+      }
+      img.addEventListener('error',fallback)
+      if(img.complete&&!img.naturalWidth)fallback()
+    })
+  }
+  const renderCard=YuboRoomCard.create({escape:esc,icons:platformIcons,heading:roomHeading,duration:durationMarkup,image:coverImage})
+  const card=room=>renderCard(room,{coverMode:state.liveCardMode})
   function render(){
+    state.rooms=YuboRoomData.mergeActivitySnapshots(state.rooms,state.temporary)
     if(state.filter==='temporary'&&!currentActivity()){state.filter='all';state.group='all'}
     const isTemporary=state.filter==='temporary',activity=currentActivity(),source=isTemporary?activity.rooms:state.rooms
+    const liveOnlyFocused=document.activeElement?.id==='temporary-only-live'
     const list=visible(),live=source.filter((r)=>r.live&&(!isTemporary||(r.statusKnown&&!r.stale))).length,mainLive=state.rooms.filter((r)=>r.live).length,fav=state.rooms.filter((r)=>state.favorites.includes(r.id)).length
     const auth=isTemporary?[]:Object.entries(state.diagnostics).filter(([id,v])=>state.enabledPlatforms.includes(id)&&v.authRequired),failed=isTemporary?[]:Object.entries(state.diagnostics).filter(([id,v])=>state.enabledPlatforms.includes(id)&&!v.ok&&!v.authRequired)
     const platforms=Object.entries(names).filter(([id])=>isTemporary||state.enabledPlatforms.includes(id))
-    const focused=document.activeElement&&document.activeElement.id==='search',cursor=focused?document.activeElement.selectionStart:null
+    const focused=document.activeElement&&document.activeElement.id==='search',cursor=focused?document.activeElement.selectionStart:null,sortFocused=!!document.activeElement?.closest('#room-sort')
     const previousTabs=app.querySelector('.filter-tabs'),previousActive=previousTabs?.querySelector('.active')
     const tabsScroll=previousTabs?.scrollLeft||0,previousTabKey=JSON.stringify(previousActive?.dataset||{})
     const platformOptions=platforms.map(([id,n])=>'<option value="'+id+'" '+(state.platform===id?'selected':'')+'>'+esc(n)+'</option>').join('')
@@ -628,10 +722,10 @@ zuo 做作坐左
     const authMarkup=auth.length&&!state.authNoticeDismissed?'<section class="auth-notices"><div class="auth-notice-heading"><strong>平台授权需要恢复</strong><button type="button" class="auth-dismiss" id="dismiss-auth-notices" title="暂时关闭提示" aria-label="暂时关闭平台授权提示">×</button></div>'+auth.map(([id])=>'<div class="auth-notice"><span>'+esc(names[id]||id)+'登录已失效</span><div class="auth-notice-actions"><button class="auth-button" data-auth="'+esc(id)+'">重新授权</button></div></div>').join('')+'</section>':''
     const failedMarkup=failed.length?'<div class="load-notice">'+failed.map(([id])=>esc(names[id]||id)).join('、')+'暂时读取失败；保留上次数据并稍后重试。</div>':''
     const unknown=isTemporary?source.filter((r)=>!r.statusKnown||r.stale).length:0
-    const temporaryStatus=state.temporaryMessage||(isTemporary?(activity.updatedAt?(unknown?unknown+' 位状态未知':'状态已更新'):'正在检测开播状态…'):'')
+    const temporaryStatus=orderNeedsReload?'临时活动后台仍是旧版，排序尚未保存。请重新加载鱼播后重试；现有活动和关注不会清除。':state.temporaryMessage||(isTemporary?(state.refreshing?'正在刷新开播状态和时长…':activity.updatedAt?(unknown?unknown+' 位状态未知':'状态已更新'):'等待检测开播状态'):'')
     app.innerHTML='<header class="top"><div class="brand"><span class="title">鱼播</span><span class="subtitle">'+(isTemporary?esc(activity.name):'关注列表')+'</span></div><div class="top-meta"><span class="count">'+live+' 正在直播 · '+source.length+' 位'+(isTemporary?'临时主播':'关注')+'</span><span class="updated">更新于 '+esc(time(isTemporary?activity.updatedAt:state.updated))+'</span></div><div class="top-actions"><button class="tool-button" id="refresh" '+(state.refreshing?'disabled':'')+'>'+(state.refreshing?'更新中…':'↻ 刷新')+'</button><nav class="site-nav" aria-label="页面导航"><a class="tool-button nav-link active" href="index.html" aria-current="page">关注列表</a><a class="tool-button nav-link" href="history.html">直播记录</a><a class="tool-button nav-link" href="shortcuts.html">快捷键</a><a class="tool-button nav-link" href="settings.html">设置</a></nav></div></header>'+
       '<section class="toolbar"><div class="filter-tabs"><button data-filter="all" class="filter-tab '+(state.filter==='all'?'active':'')+'">全部 <span>'+state.rooms.length+'</span></button><button data-filter="live" class="filter-tab '+(state.filter==='live'?'active':'')+'">正在直播 <span>'+mainLive+'</span></button><button data-filter="favorites" class="filter-tab '+(state.filter==='favorites'&&state.group==='all'?'active':'')+'">收藏 <span>'+fav+'</span></button>'+groupTabs+'</div><input id="search" class="search" type="search" placeholder="支持中文、拼音、首字母、房间号" value="'+esc(state.query)+'"><select id="platform-filter" class="select-filter"><option value="all">全部平台</option>'+platformOptions+'</select>'+'<button id="live-view-toggle" class="tool-button live-view-toggle '+(state.liveCardMode?'active':'')+'" type="button" title="切换封面模式（V）；仅显示当前标签的开播主播" aria-pressed="'+state.liveCardMode+'">'+(state.liveCardMode?'切回原样':'封面模式')+'</button>'+'</section>'+
-      '<section class="platform-health">'+(isTemporary?'<span role="status">'+esc(temporaryStatus)+'</span><label><input id="temporary-only-live" type="checkbox" '+((state.temporaryOnlyLive||state.liveCardMode)?'checked':'')+(state.liveCardMode?' disabled':'')+'>只看正在直播</label><a class="diagnostics-link" href="settings.html#temporary-activities">管理活动</a>':health+'<a class="diagnostics-link" href="settings.html#diagnostics">诊断详情</a>')+'</section>'+authMarkup+failedMarkup+'<section class="rows '+(state.liveCardMode?'live-view':'')+'">'+(list.length?list.map(card).join(''):'<div class="empty"><div>'+(state.liveCardMode?'当前标签没有符合条件的开播主播':isTemporary?'没有符合条件的活动主播':state.rooms.length?'没有符合条件的主播':state.enabledPlatforms.length?'暂无关注主播':'尚未启用平台，请前往设置启用')+'</div>'+(!isTemporary?emptySearch:'')+'</div>')+'</section>'
+      '<section class="platform-health">'+(isTemporary?'<span role="status">'+esc(temporaryStatus)+'</span><label class="live-only-toggle" title="仅显示正在直播的主播；封面模式下自动开启"><input role="switch" id="temporary-only-live" type="checkbox" '+((state.temporaryOnlyLive||state.liveCardMode)?'checked':'')+(state.liveCardMode?' disabled':'')+'>只看正在直播</label><a class="diagnostics-link" href="settings.html#temporary-activities">管理活动</a>':health+'<a class="diagnostics-link" href="settings.html#diagnostics">诊断详情</a>')+'</section>'+authMarkup+failedMarkup+'<section class="rows '+(state.liveCardMode?'live-view':'')+'">'+(list.length?list.map(card).join(''):'<div class="empty"><div>'+(state.liveCardMode?'当前标签没有符合条件的开播主播':isTemporary?'没有符合条件的活动主播':state.rooms.length?'没有符合条件的主播':state.enabledPlatforms.length?'暂无关注主播':'尚未启用平台，请前往设置启用')+'</div>'+(!isTemporary?emptySearch:'')+'</div>')+'</section>'
     const nextTabs=app.querySelector('.filter-tabs'),nextActive=nextTabs.querySelector('.active')
     nextTabs.scrollLeft=tabsScroll
     if(nextActive&&previousTabKey!==JSON.stringify(nextActive.dataset)){
@@ -641,6 +735,24 @@ zuo 做作坐左
     }
     if(focused){const input=document.getElementById('search');input.focus();const position=Math.min(cursor,input.value.length);input.setSelectionRange(position,position)}
     observeRoomTitles()
+    if(liveOnlyFocused)document.getElementById('temporary-only-live')?.focus({preventScroll:true})
+    observeCoverImages()
+    if(isTemporary&&orderNeedsReload){
+      const button=document.createElement('button');button.id='reload-activity-runtime';button.type='button';button.className='tool-button';button.textContent='重新加载鱼播'
+      button.addEventListener('click',()=>{if(confirm('重新加载鱼播以启用活动排序？不会清除活动、收藏或设置。当前扩展页面可能关闭，请重新打开关注列表。'))chrome.runtime.reload()})
+      app.querySelector('.platform-health .diagnostics-link').before(button)
+    }
+    scheduleCoverFill()
+    if(!isTemporary){
+      const sortSwitch=document.createElement('div')
+      sortSwitch.id='room-sort';sortSwitch.className='sort-switch'
+      sortSwitch.setAttribute('role','group');sortSwitch.setAttribute('aria-label','主播排序')
+      sortSwitch.title='S 循环切换；收藏、正在直播始终优先'
+      sortSwitch.innerHTML=[['default','默认'],['newest','刚开播'],['oldest','播得最久']].map(([mode,label])=>'<button type="button" data-sort-mode="'+mode+'" aria-pressed="'+(YuboRoomData.sortMode(state.settings.liveSort)===mode)+'">'+label+'</button>').join('')
+      app.querySelector('.platform-health .diagnostics-link').before(sortSwitch)
+      sortSwitch.querySelectorAll('[data-sort-mode]').forEach((button)=>button.addEventListener('click',()=>setRoomSort(button.dataset.sortMode)))
+      if(sortFocused)sortSwitch.querySelector('[aria-pressed="true"]').focus({preventScroll:true})
+    }
     app.querySelectorAll('[data-filter]').forEach((b)=>b.addEventListener('click',()=>{state.filter=b.dataset.filter;state.group='all';render()}))
     app.querySelectorAll('[data-group-tab]').forEach((b)=>b.addEventListener('click',()=>{state.filter='favorites';state.group=b.dataset.groupTab;render()}))
     const search=document.getElementById('search')
@@ -655,10 +767,27 @@ zuo 做作坐左
     const liveViewToggle=document.getElementById('live-view-toggle')
     if(liveViewToggle)liveViewToggle.addEventListener('click',()=>{state.liveCardMode=!state.liveCardMode;render()})
     document.getElementById('refresh').addEventListener('click',()=>void refresh({force:true}))
-    app.querySelectorAll('[data-activity-tab]').forEach((button)=>button.addEventListener('click',()=>{state.filter='temporary';state.group=button.dataset.activityTab;state.temporaryMessage='';render()}))
+    app.querySelectorAll('[data-activity-tab]').forEach((button)=>button.addEventListener('click',()=>activateActivity(button.dataset.activityTab)))
     document.getElementById('temporary-only-live')?.addEventListener('change',(event)=>{state.temporaryOnlyLive=event.target.checked;render()})
     const dismissAuth=document.getElementById('dismiss-auth-notices')
     if(dismissAuth)dismissAuth.addEventListener('click',()=>{state.authNoticeDismissed=true;render()})
+    app.querySelectorAll('[data-room-move]').forEach(button=>button.addEventListener('click',async event=>{
+      event.preventDefault();event.stopPropagation()
+      if(orderingBusy||state.filter!=='temporary'||button.disabled)return
+      const activityId=state.group,roomId=button.dataset.roomId,move=button.dataset.roomMove,list=visible(),index=list.findIndex(room=>room.id===roomId)
+      if(index<0)return
+      const neighborId=list[index+(move==='up'?-1:1)]?.id
+      orderingBusy=true;button.disabled=true
+      try{
+        state.temporary=await YuboTemporaryUI.request('reorder',{id:activityId,roomId,move,neighborId,mode:state.settings.liveSort})
+        orderNeedsReload=false
+        state.temporaryMessage=''
+      }catch(error){if(error.requiresReload)orderNeedsReload=true;if(state.filter==='temporary'&&state.group===activityId)state.temporaryMessage=error.message}
+      finally{
+        orderingBusy=false;render()
+        if(state.filter==='temporary'&&state.group===activityId)[...app.querySelectorAll('[data-room-move]')].find(node=>node.dataset.roomId===roomId&&node.dataset.roomMove===move&&!node.disabled)?.focus({preventScroll:true})
+      }
+    }))
     app.querySelectorAll('[data-star]').forEach((b)=>b.addEventListener('click',async()=>{
       const id=b.dataset.star,was=state.favorites.includes(id)
       state.favorites=was?state.favorites.filter((x)=>x!==id):[...state.favorites,id]
@@ -680,8 +809,13 @@ zuo 做作坐左
     if(state.refreshing)return
     state.refreshing=true;render()
     if(state.filter==='temporary'){
-      try{state.temporary=await YuboTemporaryUI.request('refresh',{id:state.group,force:options.force===true});state.temporaryMessage=''}catch(error){state.temporaryMessage=error.message}
-      finally{state.refreshing=false;render();void schedule()}
+      const activityId=state.group
+      try{
+        const result=await YuboTemporaryUI.request('refresh',{id:activityId,force:options.force===true,liveTimeCapabilities:true,coverCapabilities:true})
+        state.temporary=result
+        if(state.filter==='temporary'&&state.group===activityId)state.temporaryMessage=result.liveTimeProtocol===1&&result.coverProtocol===1?'':'临时活动后台尚未更新，请在扩展管理页重新加载鱼播后重试。'
+      }catch(error){if(state.filter==='temporary'&&state.group===activityId)state.temporaryMessage=error.message}
+      finally{finishRefresh()}
       return
     }
     const ids=await enabled();state.enabledPlatforms=ids
@@ -691,9 +825,9 @@ zuo 做作坐左
       if(result.status==='fulfilled'){rooms.push(...result.value);diagnostics[id]={ok:true,authRequired:false,count:result.value.length,checkedAt:Date.now()}}
       else{const e=result.reason;diagnostics[id]={ok:false,authRequired:!!e.authRequired,error:String(e.message||'读取失败'),count:old.filter((r)=>r.platform===id).length,checkedAt:Date.now()};rooms.push(...old.filter((r)=>r.platform===id).map((r)=>({...r,stale:true})))}
     })
-    state.rooms=YuboRoomData.mergeTitles(rooms,old);state.diagnostics=diagnostics;state.updated=Date.now()
+    state.rooms=YuboRoomData.mergeTitles(await readLiveTimes(rooms).catch(()=>rooms),old);state.diagnostics=diagnostics;state.updated=Date.now()
     await set(local,{yubo_last_rooms:state.rooms,yubo_platform_diagnostics:diagnostics,yubo_last_refresh_at:state.updated})
-    state.refreshing=false;state.authNoticeDismissed=false;render();schedule()
+    state.authNoticeDismissed=false;finishRefresh()
   }
   async function schedule(){clearTimeout(timer);const n=Math.min(60,Math.max(1,Number(decode(await get(sync,'check_interval')))||3));timer=setTimeout(refresh,n*60000)}
   try{
@@ -702,7 +836,7 @@ zuo 做作坐左
       if(area==='local'&&c[YuboTemporary.KEY]){const value=c[YuboTemporary.KEY].newValue;state.temporary=value&&Array.isArray(value.activities)?value:YuboTemporary.empty();state.temporaryMessage='';render()}
       if(area==='sync'&&c.enabled_platforms)void refresh()
       if(area==='sync'&&c.favorite_streamers){const v=decode(c.favorite_streamers.newValue);state.favorites=Array.isArray(v)?v:[];render()}
-      if(area==='local'&&(c.yubo_favorite_order||c.yubo_favorite_groups||c.yubo_favorite_group_names||c.yubo_settings||c.yubo_streamer_meta))void loadSaved().then(render)
+      if(area==='local'&&(c.yubo_favorite_order||c.yubo_streamer_order||c.yubo_favorite_groups||c.yubo_favorite_group_names||c.yubo_settings||c.yubo_streamer_meta))void loadSaved().then(render)
       if(area==='sync'&&c.check_interval)void schedule()
     })
     window.addEventListener('focus',()=>{if(Object.values(state.diagnostics).some((x)=>x.authRequired))void refresh()})

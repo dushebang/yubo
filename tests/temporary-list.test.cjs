@@ -16,6 +16,7 @@ function harness(options = {}) {
     return { ok: true, status: 200, url, text: async () => typeof body === 'string' ? body : JSON.stringify(body) }
   }
   const context = vm.createContext({ URL, AbortSignal, fetch: fetcher, crypto, chrome: { runtime: {} } })
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/room-data.js'),'utf8'),context)
   vm.runInContext(source, context)
   const module = context.YuboTemporary
   const area = {
@@ -25,8 +26,47 @@ function harness(options = {}) {
   return { module, area, controller: module.createController(area, { fetch: fetcher }), data, writes, calls, context }
 }
 const roomPayload = (id, live = 1) => ({ room: { room_id: Number(id), nickname: '主播 '+id, show_status: live, videoLoop: 0, avatar: { big: 'https://example.com/avatar.png' }, room_name: '活动直播', second_lvl_name: '户外' } })
+test('temporary refresh uses known canonical room IDs without changing vanity links or activity membership IDs',async()=>{
+  const h=harness({respond:url=>{
+    assert.equal(url.href,'https://www.douyu.com/betard/12157371')
+    return roomPayload('12157371')
+  }})
+  const room={...h.module.roomLink('https://www.douyu.com/88891'),canonicalRoomId:'12157371'}
+  const result=await h.module.roomInfo(room)
+  assert.equal(result.canonicalRoomId,'12157371');assert.equal(h.calls.length,1)
+  assert.equal(room.id,'temp_douyu_88891');assert.equal(room.roomKey,'88891')
+})
+test('temporary room polling retains official start times for all platforms without extra time requests',async()=>{
+  const start=Math.floor(Date.now()/1000)-7200
+  const h=harness({respond:(url)=>{
+    if(url.hostname==='www.douyu.com')return {room:{...roomPayload('1').room,show_time:start}}
+    if(url.hostname==='www.huya.com')return `var TT_ROOM_DATA={"state":"ON","profileRoom":2,"startTime":${start},"isReplay":false};var TT_PROFILE_INFO={"nick":"虎牙"};`
+    if(url.pathname.includes('get_info'))return {code:0,data:{room_id:3,live_status:1,live_time:start}}
+    return {data:{info:{uname:'B站'}}}
+  }})
+  for(const url of ['https://www.douyu.com/1','https://www.huya.com/2','https://live.bilibili.com/3']){
+    const room=h.module.roomLink(url),result=await h.module.roomInfo(room,h.context.fetch)
+    assert.equal(result.liveStartedAt,start*1000)
+    assert.equal(result.live,true)
+  }
+  assert.equal(h.calls.length,4)
+})
 const loader = (topic = 'STLD', id = '59047') => `window.zhtName = '${topic}'; var webm_page_config = location.protocol + '//butterfly.douyucdn.cn/api/page/loadPage?name=pageData2&pageId=${id}&ver=abc';`
 
+test('recent pre-time-feature activity caches are refreshed instead of bypassed for 30 seconds',async()=>{
+  const start=Math.floor(Date.now()/1000)-3600
+  const h=harness({respond:(url)=>({room:{...roomPayload(url.pathname.split('/').at(-1),url.pathname.endsWith('/1')?2:1).room,show_time:start}})})
+  const activityBefore=await create(h,'旧活动',[1,2]),id=activityBefore.id
+  h.data[h.module.KEY].activities[0].updatedAt=Date.now()
+  h.data[h.module.KEY].activities[0].rooms.forEach(room=>Object.assign(room,{live:true,statusKnown:true}))
+  const refreshed=await h.controller.refresh(id),activity=refreshed.activities[0]
+  assert.equal(h.calls.length,2,'old cache must not hit the normal 30-second shortcut')
+  assert.equal(activity.timeProtocol,1)
+  assert.equal(activity.rooms[0].live,false)
+  assert.equal(activity.rooms[1].liveStartedAt,start*1000)
+  await h.controller.refresh(id)
+  assert.equal(h.calls.length,2,'new complete cache still avoids repeated activity requests')
+})
 test('page-side backup reads storage without any new worker action, migration writes or cache changes',async()=>{
   const h=harness();await create(h,'活动',[1,2])
   const before=JSON.stringify(h.data),writeCount=h.writes.length
@@ -140,7 +180,8 @@ test('generic activity pages explicitly warn about incomplete dynamic content', 
   const result = await controller.preview('https://www.huya.com/activity/example', 'activity')
   assert.equal(result.rooms.length, 1)
   assert.equal(result.rooms[0].name, '赛事直播')
-  assert.match(result.warnings[0], /动态脚本或 iframe/)
+  assert.match(result.warnings[0], /动态脚本、iframe/)
+  assert.match(result.warnings[0], /顺序与实际画面不同/)
 })
 
 test('empty, unsupported, blocked or malformed previews never write over the existing list', async () => {
@@ -193,6 +234,43 @@ const create = async (h, name, ids) => {
   const candidate = await h.controller.preview(ids.map((id) => 'https://www.douyu.com/'+id).join('\n'), 'rooms')
   return (await h.controller.save({ name, candidate })).activities.at(-1)
 }
+test('import, selected subset, roster replacement, status refresh and backup retain source order',async()=>{
+  const h=harness({respond:url=>roomPayload(url.pathname.split('/').at(-1),url.pathname.endsWith('/9')?2:1)})
+  const a=await create(h,'原页顺序',[9,3,7,3])
+  const ids=()=>h.data[h.module.KEY].activities[0].rooms.map(room=>room.roomKey)
+  assert.deepEqual(ids(),['9','3','7'])
+  await h.controller.refresh(a.id,true);assert.deepEqual(ids(),['9','3','7'])
+  const candidate=await h.controller.preview('https://www.douyu.com/7\nhttps://www.douyu.com/9\nhttps://www.douyu.com/5','rooms')
+  candidate.rooms=candidate.rooms.filter(room=>room.roomKey!=='9')
+  await h.controller.save({id:a.id,name:a.name,candidate});assert.deepEqual(ids(),['7','5'])
+  const target=harness();await target.controller.restoreBackup(await h.controller.exportBackup())
+  assert.deepEqual(target.data[target.module.KEY].activities[0].rooms.map(room=>room.roomKey),['7','5'])
+})
+test('activity manual order has highest priority, survives refresh/roster updates/backup, and stays isolated',async()=>{
+  const h=harness({respond:url=>roomPayload(url.pathname.split('/').at(-1))})
+  const a=await create(h,'活动甲',[1,2,3]),b=await create(h,'活动乙',[4])
+  await h.controller.reorder({id:a.id,roomId:'temp_douyu_3',move:'top'})
+  let activity=h.data[h.module.KEY].activities[0]
+  assert.deepEqual(activity.roomOrder,['temp_douyu_3','temp_douyu_1','temp_douyu_2'])
+  await h.controller.reorder({id:a.id,roomId:'temp_douyu_3',move:'down',neighborId:'temp_douyu_2'})
+  assert.deepEqual(h.data[h.module.KEY].activities[0].roomOrder,['temp_douyu_1','temp_douyu_2','temp_douyu_3'])
+  await h.controller.reorder({id:a.id,roomId:'temp_douyu_3',move:'up',neighborId:'temp_douyu_1'})
+  await h.controller.refresh(a.id,true)
+  assert.deepEqual(h.data[h.module.KEY].activities[0].roomOrder,['temp_douyu_3','temp_douyu_1','temp_douyu_2'])
+  const candidate=await h.controller.preview('https://www.douyu.com/2\nhttps://www.douyu.com/3\nhttps://www.douyu.com/5','rooms')
+  await h.controller.save({id:a.id,name:a.name,candidate})
+  const order=['temp_douyu_3','temp_douyu_2','temp_douyu_5']
+  assert.deepEqual(h.data[h.module.KEY].activities[0].roomOrder,order)
+  const backup=await h.controller.exportBackup(),target=harness()
+  await target.controller.restoreBackup(backup)
+  assert.deepEqual(target.data[target.module.KEY].activities[0].roomOrder,order)
+  assert.equal(h.data[h.module.KEY].activities.find(item=>item.id===b.id).roomOrder,undefined)
+  const before=JSON.stringify(h.data)
+  await assert.rejects(h.controller.reorder({id:a.id,roomId:'temp_douyu_999',move:'top'}),/不在此活动/)
+  await assert.rejects(h.controller.reorder({id:a.id,roomId:'temp_douyu_3',move:'wrong'}),/无效/)
+  await assert.rejects(h.controller.reorder({id:a.id,roomId:'temp_douyu_3',move:'down',neighborId:'temp_douyu_999'}),/相邻/)
+  assert.equal(JSON.stringify(h.data),before)
+})
 
 test('multiple activities, rename and roster updates remain isolated from each other and official lists', async () => {
   const h = harness({ respond: (url) => roomPayload(url.pathname.split('/').at(-1)) })

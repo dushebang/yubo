@@ -117,7 +117,7 @@
         found = dedupe(payload.data.roomIds.map((id) => /^\d+$/.test(String(id)) ? roomLink('https://www.douyu.com/'+id) : null))
       } else {
         found = pageRooms(html, url)
-        warnings.push('此页面按可读取的直播间链接提取，请核对预览；动态脚本或 iframe 内的主播可能无法完整提取。')
+        warnings.push('此页面按可读取的直播间链接出现顺序提取，请核对预览；动态脚本、iframe 或页面视觉重排可能导致名单不完整或顺序与实际画面不同。')
       }
       if (!found.length) throw new Error('活动页未提取到主播链接。请复制活动里的直播间链接，使用“直播间链接列表”导入；原列表未被替换。')
       methods.push({ source: url, method: config ? 'activity-config' : 'page-links', count: found.length })
@@ -147,25 +147,28 @@
     const valid = roomLink(room.url)
     if (!valid || valid.id !== room.id) throw new Error('直播间地址无效。')
     if (room.platform === 'douyu') {
-      const json = JSON.parse(await requestText('https://www.douyu.com/betard/'+encodeURIComponent(room.roomKey), fetcher))
+      const key=YuboRoomData.roomIdentity(room)?.requestRoomId||room.roomKey
+      const json = JSON.parse(await requestText('https://www.douyu.com/betard/'+encodeURIComponent(key), fetcher))
       const data = json.room
       if (!data?.room_id || ![1,2].includes(Number(data.show_status))) throw new Error('房间不存在或直播状态不可读取。')
-      return { name: data.nickname || room.name, avatar: imageUrl(data.avatar?.big || data.avatar?.middle || data.avatar), cover: imageUrl(data.room_pic),
-        title: data.room_name || '', category: data.second_lvl_name || '直播', live: Number(data.show_status) === 1 && Number(data.videoLoop || 0) === 0,
+      return { name: data.nickname || room.name, avatar: imageUrl(data.avatar?.big || data.avatar?.middle || data.avatar), ...YuboRoomData.metadataFor('douyu',data),
+        category: data.second_lvl_name || '直播', live: Number(data.show_status) === 1 && Number(data.videoLoop || 0) === 0,
         canonicalRoomId: String(data.room_id) }
     }
     if (room.platform === 'huya') {
-      const html = await requestText(room.url, fetcher), data = assignedObject(html, 'TT_ROOM_DATA'), profile = assignedObject(html, 'TT_PROFILE_INFO')
+      const key=YuboRoomData.roomIdentity(room)?.requestRoomId||room.roomKey
+      const html = await requestText('https://www.huya.com/'+encodeURIComponent(key), fetcher), data = assignedObject(html, 'TT_ROOM_DATA'), profile = assignedObject(html, 'TT_PROFILE_INFO')
       if (!data.profileRoom || !['ON','OFF','REPLAY'].includes(data.state)) throw new Error('虎牙房间状态不可读取。')
-      return { name: profile.nick || room.name, avatar: imageUrl(profile.avatar), cover: imageUrl(data.screenshot || data.cover), title: data.introduction || '', category: '直播',
-        live: data.state === 'ON' && !data.isReplay, canonicalRoomId: String(data.profileRoom) }
+      return { name: profile.nick || room.name, avatar: imageUrl(profile.avatar), ...YuboRoomData.metadataFor('huya',data), category: '直播',
+        live: data.state === 'ON' && !(data.isReplay === true || Number(data.isReplay) > 0), canonicalRoomId: String(data.profileRoom) }
     }
-    const data = JSON.parse(await requestText('https://api.live.bilibili.com/room/v1/Room/get_info?room_id='+encodeURIComponent(room.roomKey), fetcher))
+    const key=YuboRoomData.roomIdentity(room)?.requestRoomId||room.roomKey
+    const data = JSON.parse(await requestText('https://api.live.bilibili.com/room/v1/Room/get_info?room_id='+encodeURIComponent(key), fetcher))
     if (Number(data.code) !== 0 || !data.data?.room_id || data.data.live_status == null || ![0,1,2].includes(Number(data.data.live_status))) throw new Error('B站房间不存在或状态不可读取。')
     let profile = {}
-    try { profile = JSON.parse(await requestText('https://api.live.bilibili.com/live_user/v1/UserInfo/get_anchor_in_room?roomid='+encodeURIComponent(room.roomKey), fetcher)).data?.info || {} } catch {}
+    try { profile = JSON.parse(await requestText('https://api.live.bilibili.com/live_user/v1/UserInfo/get_anchor_in_room?roomid='+encodeURIComponent(key), fetcher)).data?.info || {} } catch {}
     const info = data.data
-    return { name: profile.uname || room.name, avatar: imageUrl(profile.face), cover: imageUrl(info.user_cover || info.keyframe), title: info.title || '', category: info.area_name || '直播',
+    return { name: profile.uname || room.name, avatar: imageUrl(profile.face), ...YuboRoomData.metadataFor('bilibili',info), category: info.area_name || '直播',
       live: Number(info.live_status) === 1, canonicalRoomId: String(info.room_id) }
   }
 
@@ -187,14 +190,15 @@
         ids.add(canonical.id)
         return { url: canonical.url, name: typeof room.name === 'string' && room.name.trim() ? room.name.trim().slice(0,200) : canonical.name }
       })
-      return { name: activity.name.trim(), mode: activity.mode, sources: [...new Set(activity.sources)], rooms }
+      if(activity.roomOrder!==undefined&&(!Array.isArray(activity.roomOrder)||activity.roomOrder.length>MAX_ROOMS||activity.roomOrder.some(id=>typeof id!=='string'||!ids.has(id))||new Set(activity.roomOrder).size!==activity.roomOrder.length))throw new Error('临时活动排序无效，未导入。')
+      return { name: activity.name.trim(), mode: activity.mode, sources: [...new Set(activity.sources)], rooms,...(activity.roomOrder?.length?{roomOrder:[...activity.roomOrder]}:{}) }
     }) }
   }
 
   function backupFromCollection(collection) {
     if (!collection || collection.version !== 2 || !Array.isArray(collection.activities)) throw new Error('活动数据格式异常，未导出备份。')
     return normalizeBackup({ version: 1, activities: collection.activities.map((activity) => ({
-      name: activity.name, mode: activity.mode, sources: activity.sources, rooms: activity.rooms
+      name: activity.name, mode: activity.mode, sources: activity.sources, rooms: activity.rooms,roomOrder:activity.roomOrder
     })) })
   }
   async function readBackup(area) {
@@ -264,6 +268,7 @@
         const activity = { id: previous?.id || 'activity-'+revision(), name, revision: revision(), mode, sources,
           input: (sources.length ? sources : rooms.map((room) => room.url)).join('\n'),
           rooms: rooms.map((room) => oldRooms.get(room.id) || room), importedAt: Date.now(), updatedAt: 0 }
+        if(previous?.roomOrder?.length){const ids=new Set(rooms.map(room=>room.id));activity.roomOrder=[...previous.roomOrder.filter(id=>ids.has(id)),...rooms.map(room=>room.id).filter(id=>!previous.roomOrder.includes(id))]}
         return write({ ...collection, activities: previous ? collection.activities.map((item) => item.id === id ? activity : item) : [...collection.activities, activity] })
       })
     }
@@ -280,6 +285,24 @@
         return write({ ...collection, activities: collection.activities.filter((item) => item.id !== id) })
       })
     }
+    async function reorder({id,roomId,move,neighborId,mode}={}) {
+      if(!['top','up','down'].includes(move))throw new Error('无效的排序操作。')
+      return serial(async()=>{
+        const collection=await load(),activity=requireActivity(collection,id)
+        if(!activity.rooms.some(room=>room.id===roomId))throw new Error('主播已不在此活动中，请刷新后重试。')
+        const ids=activity.rooms.map(room=>room.id),old=activity.roomOrder||[]
+        const order=old.length?[...old.filter(key=>ids.includes(key)),...ids.filter(key=>!old.includes(key))]:YuboRoomData.sortRooms(activity.rooms,{temporary:true,mode}).map(room=>room.id)
+        const index=order.indexOf(roomId)
+        if(move==='top'){order.splice(index,1);order.unshift(roomId)}
+        else {
+          const neighbor=neighborId||order[index+(move==='up'?-1:1)]
+          if(neighbor===roomId||!order.includes(neighbor))throw new Error('没有可移动的相邻主播。')
+          order.splice(index,1);const target=order.indexOf(neighbor)
+          order.splice(target+(move==='down'?1:0),0,roomId)
+        }
+        return write({...collection,activities:collection.activities.map(item=>item.id===id?{...item,roomOrder:order}:item)})
+      })
+    }
     async function exportBackup() {
       return serial(async () => backupFromCollection(await load()))
     }
@@ -293,7 +316,8 @@
     }
     async function refresh(id, force = false) {
       const collection = await read(), snapshot = requireActivity(collection, id)
-      if (!snapshot.rooms.length || (!force && snapshot.updatedAt && Date.now() - snapshot.updatedAt < 30000)) return collection
+      if (!globalThis.YuboRoomData?.metadataFor) throw new Error('临时活动后台尚未更新，请在扩展管理页重新加载鱼播后重试。')
+      if (!snapshot.rooms.length || (!force && snapshot.timeProtocol === 1 && snapshot.coverProtocol === 1 && snapshot.updatedAt && Date.now() - snapshot.updatedAt < 30000)) return collection
       const flightKey = id + ':' + snapshot.revision
       if (inFlight.has(flightKey)) return inFlight.get(flightKey)
       const promise = (async () => {
@@ -313,7 +337,7 @@
         return serial(async () => {
           const current = await load(), activity = current.activities.find((item) => item.id === id)
           if (!activity || activity.revision !== snapshot.revision) return current
-          return write({ ...current, activities: current.activities.map((item) => item.id === id ? { ...item, rooms, updatedAt: Date.now() } : item) })
+          return write({ ...current, activities: current.activities.map((item) => item.id === id ? { ...item, rooms, timeProtocol: 1, coverProtocol: 1, updatedAt: Date.now() } : item) })
         })
       })()
       inFlight.set(flightKey, promise)
@@ -329,7 +353,7 @@
       }
       return read()
     }
-    return { read, save, rename, remove, exportBackup, restoreBackup, refresh, refreshAll, preview: (input, mode) => preview(input, mode, fetcher) }
+    return { read, save, rename, remove, reorder, exportBackup, restoreBackup, refresh, refreshAll, preview: (input, mode) => preview(input, mode, fetcher) }
   }
   globalThis.YuboTemporary = { KEY, LEGACY_KEY, MAX_ROOMS, MAX_ACTIVITIES, empty, roomLink, directRooms, pageRooms, activityRequest, preview, assignedObject, roomInfo, normalizeBackup, readBackup, createController }
 })()

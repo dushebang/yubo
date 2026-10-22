@@ -6,6 +6,17 @@
   const status = $('temporary-import-status'), preview = $('temporary-preview'), parse = $('temporary-parse'), apply = $('temporary-apply')
   let collection = YuboTemporary.empty(), editing = null, candidate = null, selected = new Set(), nonce = 0, saving = false
   const expanded = new Set()
+  function confirmActivityDelete(activity) {
+    const warning=$('temporary-delete-dialog')
+    if(warning.open)return Promise.resolve(false)
+    $('temporary-delete-description').textContent='将删除活动“'+activity.name+'”及其本机名单（'+activity.rooms.length+' 位主播），并移除分组栏中的活动入口。'
+    warning.returnValue='cancel'
+    return new Promise(resolve=>{
+      warning.addEventListener('close',()=>resolve(warning.returnValue==='delete'),{once:true})
+      warning.showModal()
+      $('temporary-delete-cancel').focus({preventScroll:true})
+    })
+  }
   function reset() { nonce++; candidate = null; selected.clear(); preview.innerHTML = ''; apply.disabled = true; status.textContent = '' }
   input.addEventListener('input', reset); mode.addEventListener('change', reset)
   dialog.addEventListener('cancel', (event) => { if (saving) event.preventDefault() })
@@ -37,7 +48,7 @@
       const result = await request('preview', { input: input.value, mode: mode.value })
       if (started !== nonce || !dialog.open) return
       candidate = result; selected = new Set(result.rooms.map((room) => room.id))
-      const method = result.mode === 'rooms' ? '直播间链接列表' : result.methods?.every((item) => item.method === 'activity-config') ? '活动官方配置' : '页面链接（需核对）'
+      const method = result.mode === 'rooms' ? '直播间链接列表（按输入顺序）' : result.methods?.every((item) => item.method === 'activity-config') ? '活动官方配置（按名单顺序）' : '页面链接（按出现顺序，需核对）'
       const oldIds = new Set((editing?.rooms || []).map((room) => room.id))
       const added = result.rooms.filter((room) => !oldIds.has(room.id)).length
       const removed = [...oldIds].filter((id) => !selected.has(id)).length
@@ -96,7 +107,7 @@
       return
     }
     if (action === 'edit' || action === 'update') { open(activity, action === 'update'); return }
-    if (action === 'remove' && !confirm('删除活动“'+activity.name+'”及其本机名单？不会取消正式关注，其他活动保持不变。')) return
+    if (action === 'remove' && !await confirmActivityDelete(activity)) return
     button.disabled = true; $('temporary-manager-status').textContent = action === 'refresh' ? '正在刷新此活动的开播状态…' : '正在保存…'
     try {
       collection = await request(action, { id: activity.id, name: row.querySelector('[data-activity-name]').value, force: true })

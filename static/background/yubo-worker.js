@@ -1,4 +1,4 @@
-importScripts('../room-data.js', '../temporary-list.js')
+importScripts('../room-data.js', '../temporary-list.js', 'single-list-tab.js')
 const temporaryList = YuboTemporary.createController(chrome.storage.local)
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -10,6 +10,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     else if (message.action === 'read') {
       value = await temporaryList.read()
       if (message.backupCapabilities) value = { ...value, backupProtocol: 1 }
+      if (message.orderCapabilities) value = { ...value, orderProtocol: 1 }
     }
     else if (message.action === 'export-backup') value = await temporaryList.exportBackup()
     else if (message.action === 'restore-backup') value = await temporaryList.restoreBackup(message.backup)
@@ -19,7 +20,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       void temporaryList.refresh(id, true).catch((error) => console.warn('[鱼播] 临时活动刷新失败', error))
     } else if (message.action === 'rename') value = await temporaryList.rename(message.id, message.name)
     else if (message.action === 'remove') value = await temporaryList.remove(message.id)
-    else if (message.action === 'refresh') value = await temporaryList.refresh(message.id, message.force === true)
+    else if (message.action === 'reorder') value = await temporaryList.reorder(message)
+    else if (message.action === 'refresh') {
+      value = await temporaryList.refresh(message.id, message.force === true)
+      if (message.liveTimeCapabilities) value = { ...value, liveTimeProtocol: 1 }
+      if (message.coverCapabilities) value = { ...value, coverProtocol: 1 }
+    }
     else throw new Error('不支持的临时列表操作')
     sendResponse({ ok: true, value })
   })().catch((error) => sendResponse({ ok: false, error: error.message || '临时列表操作失败，原列表未变更。' }))
@@ -30,6 +36,7 @@ const ALARM_NAME = 'yubo-check-live-status'
 const PLATFORM_PREFIX = { bilibili: 'bili_', douyu: 'dy_', huya: 'huya_' }
 const PLATFORM_NAMES = { bilibili: '哔哩哔哩', douyu: '斗鱼', huya: '虎牙' }
 let checkInProgress = false
+const readLiveTimes = YuboRoomData.createTimeReader(chrome.storage.local)
 
 // Remove the obsolete platform credential left by older extension versions.
 chrome.storage.sync.get('twitch_config', (items) => {
@@ -66,11 +73,7 @@ async function fetchBilibili() {
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   const json = await response.json()
   if (Number(json.code) === -101 || /账号未登录|未登录|登录失效/.test(`${json.message || ''} ${json.msg || ''}`)) throw new PlatformError('bilibili', '登录已失效', true)
-  return (json.data?.list || []).map((item) => ({
-    id: `bili_${item.roomid}`, platform: 'bilibili', name: item.uname, avatar: item.face,
-    cover: item.room_cover, title: YuboRoomData.titleFor('bilibili', item), category: item.area_name_v2 || '直播', live: item.live_status === 1,
-    url: `https://live.bilibili.com/${item.roomid}`
-  }))
+  return (json.data?.list || []).map(item => YuboRoomData.followRoom('bilibili',item))
 }
 
 async function fetchDouyu() {
@@ -80,11 +83,7 @@ async function fetchDouyu() {
   const authCode = [json.code, json.error, json.errno].some((value) => [-1, 401, 403].includes(Number(value)))
   const message = [json.msg, json.message, json.errorMsg, json.error_msg].filter(Boolean).join(' ')
   if (authCode || /未登录|请登录|登录失效|未授权|unauthori[sz]ed|login required/i.test(message)) throw new PlatformError('douyu', '登录已失效', true)
-  return (json.data?.list || []).map((item) => ({
-    id: `dy_${item.room_id}`, platform: 'douyu', name: item.nickname, avatar: item.avatar_small,
-    cover: item.room_src, title: YuboRoomData.titleFor('douyu', item), category: item.game_name || '直播',
-    live: item.show_status == 1 && item.videoLoop == 0, url: `https://www.douyu.com${item.url}`
-  }))
+  return (json.data?.list || []).map(item => YuboRoomData.followRoom('douyu',item))
 }
 
 async function fetchHuya() {
@@ -93,11 +92,7 @@ async function fetchHuya() {
   const json = await fetch(`https://fw.huya.com/dispatch?do=subscribeList&uid=${encodeURIComponent(login.uid)}`, { credentials: 'include' }).then((response) => response.json())
   if (Number(json.status) === 1401 || /未登录|请登录|登录失效/.test(String(json.message || json.msg || ''))) throw new PlatformError('huya', '登录已失效', true)
   if (!Array.isArray(json.result?.list)) throw new Error('虎牙关注列表返回格式异常')
-  return (json.result?.list || []).map((item) => ({
-    id: `huya_${item.uid}`, platform: 'huya', name: item.nick, avatar: item.avatar180,
-    cover: item.screenshot, title: YuboRoomData.titleFor('huya', item), category: item.gameName || '直播', live: !!item.isLive,
-    url: `https://www.huya.com/${item.profileRoom}`
-  }))
+  return (json.result?.list || []).map(item => YuboRoomData.followRoom('huya',item))
 }
 
 const FETCHERS = { bilibili: fetchBilibili, douyu: fetchDouyu, huya: fetchHuya }
@@ -134,7 +129,7 @@ async function fetchAllPlatforms() {
       rooms.push(...(oldByPlatform.get(platform) || []).map((room) => ({ ...room, stale: true })))
     }
   })
-  const mergedRooms = YuboRoomData.mergeTitles(rooms, oldRooms)
+  const mergedRooms = YuboRoomData.mergeTitles(await readLiveTimes(rooms).catch(() => rooms), oldRooms)
   await write(chrome.storage.local, {
     yubo_last_rooms: mergedRooms,
     yubo_platform_diagnostics: diagnostics,

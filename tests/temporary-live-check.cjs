@@ -19,6 +19,7 @@ async function fetcher(address) {
   return { ok: true, status: 200, url: address, text: async () => body }
 }
 const context = vm.createContext({ URL, AbortSignal, fetch: fetcher })
+vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/room-data.js'),'utf8'), context)
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/temporary-list.js'),'utf8'), context)
 ;(async () => {
   const results = []

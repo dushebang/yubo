@@ -111,6 +111,15 @@
     <p id="temporary-import-status" role="status" aria-live="polite"></p>
     <div id="temporary-preview" class="temporary-preview"></div>
   </dialog>
+  <dialog id="temporary-delete-dialog" class="meta-dialog temporary-delete-dialog" aria-labelledby="temporary-delete-title" aria-describedby="temporary-delete-description temporary-delete-warning">
+    <form method="dialog">
+      <div class="meta-dialog-heading"><h2 id="temporary-delete-title">确认删除临时活动？</h2></div>
+      <p id="temporary-delete-description"></p>
+      <p id="temporary-delete-warning" class="temporary-delete-warning">删除后无法直接撤销，需重新导入或从备份恢复。不会取消正式关注、移除收藏或影响其他活动。</p>
+      <div class="meta-dialog-actions"><button id="temporary-delete-cancel" class="secondary-button" value="cancel" autofocus>取消</button><button id="temporary-delete-confirm" class="secondary-button temporary-confirm-delete" value="delete">确认删除</button></div>
+    </form>
+  </dialog>
+  <script src="../static/room-data.js"></script>
   <script src="../static/temporary-list.js"></script>
   <script src="temporary-ui.js"></script>
   <script src="temporary-settings.js"></script>

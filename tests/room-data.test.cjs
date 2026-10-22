@@ -9,6 +9,13 @@ function workerHarness() {
   const state = { huya:{status:200,result:{list:[structuredClone(huyaRecord)]}},
     douyu:{data:{list:[{room_id:9999,nickname:'斗鱼测试',show_status:1,videoLoop:0,url:'/9999',room_name:'斗鱼标题'}]}},
     bilibili:{code:0,data:{list:[{roomid:6,uname:'B站测试',live_status:1,title:'B站标题'}]}} }
+  const start=Math.floor(Date.now()/1000)-3600
+  state.huya.result.list[0].startTime=start
+  state.douyu.data.list[0].show_time=start
+  state.bilibili.data.list[0].live_time=start
+  state.bilibili.data.list[0].keyframe='https://i0.hdslb.com/fixture.jpg'
+  state.douyu.data.list[0].room_src='https://rpic.douyucdn.cn/asrpic/fixture.jpg'
+  state.huya.result.list[0].screenshot='https://huyaimg.msstatic.com/fixture.jpg'
   const event=()=>({addListener(){}})
   const area=(name)=>({get(key,callback){queueMicrotask(()=>callback({[key]:structuredClone(data[name][key])}))},set(values,callback){Object.assign(data[name],structuredClone(values));queueMicrotask(()=>callback?.())},remove(){}})
   const context=vm.createContext({URL,AbortSignal,crypto,console,fetch:async(address,init)=>{
@@ -27,7 +34,19 @@ function workerHarness() {
   vm.runInContext(fs.readFileSync(path.join(root,'static/background/yubo-worker.js'),'utf8'),context)
   return {context,data,state,calls}
 }
-function moduleOnly(){const context=vm.createContext({});vm.runInContext(roomDataSource,context);return context.YuboRoomData}
+function moduleOnly(){const context=vm.createContext({URL});vm.runInContext(roomDataSource,context);return context.YuboRoomData}
+test('platform cover selection prefers real screenshot fields and retains a distinct poster fallback',()=>{
+  const m=moduleOnly(),poster='https://rpic.douyucdn.cn/live-cover/poster.png',shot='https://rpic.douyucdn.cn/asrpic/261021/12157371_src_1732.avif/dy4'
+  const douyu=m.coversFor('douyu',{room_pic:shot,room_src:'asrpic/261021/12157371_src_1732.avif/dy4',coverSrc:poster})
+  assert.equal(douyu.cover,shot);assert.equal(douyu.coverFallback,poster);assert.equal(douyu.coverKind,'snapshot')
+  assert.equal(m.coversFor('douyu',{room_src:'asrpic/fixture.jpg'}).cover,'https://rpic.douyucdn.cn/asrpic/fixture.jpg')
+  assert.equal(m.coversFor('douyu',{room_src:poster}).coverKind,'cover')
+  assert.equal(m.coversFor('bilibili',{keyframe:'//i0.hdslb.com/shot.jpg',user_cover:'https://i0.hdslb.com/poster.jpg'}).cover,'https://i0.hdslb.com/shot.jpg')
+  assert.equal(m.coversFor('bilibili',{keyframe:'//i0.hdslb.com/shot.jpg',user_cover:'https://i0.hdslb.com/poster.jpg'}).coverFallback,'https://i0.hdslb.com/poster.jpg')
+  assert.equal(m.coversFor('huya',{screenshot:'https://huyaimg.msstatic.com/shot.jpg',cover:'https://huyaimg.msstatic.com/poster.jpg'}).coverKind,'snapshot')
+  assert.equal(m.coversFor('huya',{screenshot:'javascript:alert(1)',cover:'https://huyaimg.msstatic.com/poster.jpg'}).coverKind,'cover')
+  assert.equal(m.coversFor('douyu',{}).cover,'')
+})
 test('Huya title mapping prioritizes actual subscribeList intro and retains alternate schema compatibility',()=>{
   const m=moduleOnly()
   assert.equal(m.titleFor('huya',huyaRecord),'回来开工')
@@ -49,6 +68,8 @@ test('real background polling stores fresh titles from all three platforms and p
   const first=await h.context.fetchAllPlatforms()
   assert.deepEqual(Array.from(first.rooms,r=>r.title),['B站标题','斗鱼标题','回来开工'])
   assert.deepEqual(h.data.local.yubo_last_rooms.map(r=>r.title),['B站标题','斗鱼标题','回来开工'])
+  assert.ok(first.rooms.every(r=>Number.isFinite(r.liveStartedAt)&&r.liveStartedAt>0),'all three list mappers retain official start times')
+  assert.equal(h.calls.length,4,'list timestamps require no per-room requests')
   delete h.state.huya.result.list[0].intro
   delete h.state.douyu.data.list[0].room_name
   delete h.state.bilibili.data.list[0].title
