@@ -53,8 +53,18 @@
     </section>
     <section class="settings-card" id="temporary-activities">
       <div class="section-title"><h2>临时活动 <span id="temporary-count"></span></h2><button class="secondary-button" id="temporary-add" type="button">添加活动</button></div>
+      <p class="hint temporary-intro">活动期间临时查看一组主播的开播状态，无需逐个关注。支持多个独立活动，不加入正式关注、收藏或开播提醒。</p>
       <p class="hint temporary-support-note">仅支持斗鱼平台活动，且有一定几率识别失败。</p>
-      <details class="temporary-help"><summary>使用说明</summary><p class="hint">各活动独立显示在关注列表分组栏，仅保存在本机，不加入正式关注或通知。“更新名单”重新读取该活动来源并增删主播；“刷新状态”只检测现有主播是否开播。来源和检测时间可点击各行“详情”查看。</p></details>
+      <details class="temporary-help">
+        <summary>功能介绍与使用方法</summary>
+        <ol class="temporary-guide">
+          <li><strong>添加活动：</strong>点击右上角“添加活动”，填写名称并粘贴斗鱼活动页链接。也可切换为“直播间链接列表”，导入斗鱼、虎牙、B站的房间地址，或读取本机 txt / JSON / HTML 文件。</li>
+          <li><strong>预览再保存：</strong>点击“解析并预览”，核对主播名单、勾选需要的房间后保存。默认保留来源名单或输入顺序；动态页面可能识别不全或顺序有差异，请以预览为准。</li>
+          <li><strong>查看与排序：</strong>回到“关注列表”，点击顶部分组栏中的活动名称，查看开播状态和有效的已播时长。可开启“只看正在直播”，或按 V 切换封面模式；格子的置顶、上移、下移按钮可调整顺序，每个活动独立保存。</li>
+          <li><strong>更新与管理：</strong>“更新名单”重新读取来源，增删参与主播；“刷新状态”只检测现有名单。“编辑”可修改来源，名称修改后点“保存”，“详情”可查看来源与检测时间。操作只影响当前活动。</li>
+          <li><strong>结束与迁移：</strong>活动数据保存在本机，随“备份与迁移”的 JSON / WebDAV 备份迁移。活动结束可删除，确认后无法直接撤销，需重新导入或从备份恢复；不会取消正式关注或影响其他活动。</li>
+        </ol>
+      </details>
       <p id="temporary-manager-status" class="hint" role="status" aria-live="polite"></p>
       <div id="temporary-activity-list" role="region" aria-label="临时活动管理列表" tabindex="0"></div>
     </section>

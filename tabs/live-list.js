@@ -424,6 +424,31 @@ zuo 做作坐左
   }
   const state={rooms:[],diagnostics:{},favorites:[],order:[],streamerOrder:[],groups:{},groupNames:[],settings:{},streamerMeta:{},enabledPlatforms:Object.keys(names),filter:'all',liveCardMode:false,platform:'all',group:'all',query:'',refreshing:false,authNoticeDismissed:false,temporary:YuboTemporary.empty(),temporaryOnlyLive:false,temporaryMessage:''}
   const readLiveTimes=YuboRoomData.createTimeReader(local)
+  let viewReady=false,lastViewJSON=''
+  const viewContext=()=>({activityIds:state.temporary.activities.map(activity=>activity.id),groupNames:state.groupNames,enabledPlatforms:state.enabledPlatforms,fallbackSort:state.settings.liveSort})
+  function applyListView(view){
+    for(const key of ['filter','group','platform','liveCardMode','temporaryOnlyLive'])state[key]=view[key]
+    state.settings={...state.settings,liveSort:view.sort}
+  }
+  async function restoreListView(){
+    const saved=await get(local,YuboListView.KEY)
+    const view=YuboListView.normalize(saved,viewContext())
+    // Sorting already belongs to backed-up settings. A newly restored backup wins
+    // over an older browser-local view snapshot; the snapshot is only a fallback.
+    if(['default','newest','oldest'].includes(state.settings.liveSort))view.sort=state.settings.liveSort
+    applyListView(view)
+    lastViewJSON=JSON.stringify(saved);viewReady=true
+  }
+  function rememberListView(){
+    if(!viewReady)return
+    const view=YuboListView.normalize({version:1,filter:state.filter,group:state.group,platform:state.platform,liveCardMode:state.liveCardMode,temporaryOnlyLive:state.temporaryOnlyLive,sort:state.settings.liveSort},viewContext())
+    applyListView(view)
+    const json=JSON.stringify(view)
+    if(json===lastViewJSON)return
+    lastViewJSON=json
+    // Issue the small storage write immediately, including before a duplicate tab closes.
+    local.set({[YuboListView.KEY]:view},()=>{if(chrome.runtime.lastError){lastViewJSON='';console.warn('[鱼播] 列表偏好保存失败：',chrome.runtime.lastError.message)}})
+  }
   let timer,searchComposing=false,pendingActivityRefresh='',orderingBusy=false,orderNeedsReload=false
   let coverTimer,coverReading=false,coverNextAt=0
   const viewDetails=new Map()
@@ -702,6 +727,7 @@ zuo 做作坐左
   const renderCard=YuboRoomCard.create({escape:esc,icons:platformIcons,heading:roomHeading,duration:durationMarkup,image:coverImage})
   const card=room=>renderCard(room,{coverMode:state.liveCardMode})
   function render(){
+    rememberListView()
     state.rooms=YuboRoomData.mergeActivitySnapshots(state.rooms,state.temporary)
     if(state.filter==='temporary'&&!currentActivity()){state.filter='all';state.group='all'}
     const isTemporary=state.filter==='temporary',activity=currentActivity(),source=isTemporary?activity.rooms:state.rooms
@@ -831,7 +857,7 @@ zuo 做作坐左
   }
   async function schedule(){clearTimeout(timer);const n=Math.min(60,Math.max(1,Number(decode(await get(sync,'check_interval')))||3));timer=setTimeout(refresh,n*60000)}
   try{
-    document.title='鱼播 · 关注列表';await loadSaved();render()
+    document.title='鱼播 · 关注列表';await loadSaved();await restoreListView();render()
     chrome.storage.onChanged.addListener((c,area)=>{
       if(area==='local'&&c[YuboTemporary.KEY]){const value=c[YuboTemporary.KEY].newValue;state.temporary=value&&Array.isArray(value.activities)?value:YuboTemporary.empty();state.temporaryMessage='';render()}
       if(area==='sync'&&c.enabled_platforms)void refresh()
