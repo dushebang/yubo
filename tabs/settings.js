@@ -133,8 +133,8 @@
       ;[order[i],order[j]]=[order[j],order[i]];await set(local,{yubo_favorite_order:order});renderLists()
     }))
     streamerNode.querySelectorAll('[data-unfav]').forEach((b)=>b.addEventListener('click',async()=>{
-      const id=b.dataset.unfav;favorites=favorites.filter((x)=>x!==id);order=order.filter((x)=>x!==id);delete groups[id]
-      await set(sync,{favorite_streamers:favorites});await set(local,{yubo_favorite_order:order,yubo_favorite_groups:groups});renderLists()
+      const id=b.dataset.unfav;favorites=favorites.filter((x)=>x!==id);order=order.filter((x)=>x!==id)
+      await set(sync,{favorite_streamers:favorites});await set(local,{yubo_favorite_order:order});renderLists()
     }))
     streamerNode.querySelectorAll('[data-edit-meta]').forEach((b)=>b.addEventListener('click',()=>{
       const id=b.dataset.editMeta,room=roomFor(id),meta=streamerMeta[id]||{},dialog=document.getElementById('meta-dialog')

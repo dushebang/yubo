@@ -740,7 +740,7 @@ zuo 做作坐左
     const tabsScroll=previousTabs?.scrollLeft||0,previousTabKey=JSON.stringify(previousActive?.dataset||{})
     const platformOptions=platforms.map(([id,n])=>'<option value="'+id+'" '+(state.platform===id?'selected':'')+'>'+esc(n)+'</option>').join('')
     const groupTabs=state.groupNames.map((n)=>{
-      const count=state.favorites.filter((id)=>state.groups[id]===n).length,active=state.filter==='favorites'&&state.group===n
+      const count=state.rooms.filter((room)=>state.groups[room.id]===n).length,active=state.filter==='favorites'&&state.group===n
       return '<button data-group-tab="'+esc(n)+'" class="filter-tab group-tab '+(active?'active':'')+'">'+esc(n)+' <span>'+count+'</span></button>'
     }).join('')+state.temporary.activities.map((item)=>'<button data-activity-tab="'+esc(item.id)+'" class="filter-tab '+(isTemporary&&item.id===state.group?'active':'')+'">'+esc(item.name)+' <span>'+item.rooms.length+'</span></button>').join('')
     const emptySearch=state.query.trim()?'<div class="empty-search"><span>是否到平台搜索“'+esc(state.query.trim())+'”？</span><div class="empty-search-actions"><button type="button" class="empty-search-button" data-platform-search="douyu">搜索斗鱼</button><button type="button" class="empty-search-button" data-platform-search="huya">搜索虎牙</button><button type="button" class="empty-search-button" data-platform-search="bilibili">搜索 B 站</button></div></div>':''
@@ -818,8 +818,7 @@ zuo 做作坐左
       const id=b.dataset.star,was=state.favorites.includes(id)
       state.favorites=was?state.favorites.filter((x)=>x!==id):[...state.favorites,id]
       state.order=was?state.order.filter((x)=>x!==id):[...state.order,id]
-      if(was)delete state.groups[id]
-      await set(sync,{favorite_streamers:state.favorites});await set(local,{yubo_favorite_order:state.order,yubo_favorite_groups:state.groups});render()
+      await set(sync,{favorite_streamers:state.favorites});await set(local,{yubo_favorite_order:state.order});render()
     }))
     app.querySelectorAll('.row.live').forEach((row)=>row.addEventListener('mouseenter',()=>{
       const preview=row.querySelector('.hover-cover');if(!preview)return

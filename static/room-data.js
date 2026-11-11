@@ -103,9 +103,12 @@
   }
   function selectCardRooms(rooms, options={}) {
     const sorted=sortRooms(cardRooms(rooms,options),options)
+    // Legacy view memory represents group tabs as favorites + group name.
+    // A concrete group is independent of favorite status; only the bare tab filters favorites.
+    const grouped=options.group&&options.group!=='all'
     return sorted.filter(room=>{
       if((options.coverMode||options.onlyLive||options.filter==='live')&&(!room.live||(options.coverMode&&room.stale)))return false
-      if(options.filter==='favorites'&&!room.favorite)return false
+      if(options.filter==='favorites'&&!grouped&&!room.favorite)return false
       if(options.platform&&options.platform!=='all'&&options.platform!==room.platform)return false
       if(options.group&&options.group!=='all'&&options.groups?.[room.id]!==options.group)return false
       return !options.matches||options.matches(room)

@@ -56,3 +56,13 @@ test('card labels keep vanity numbers while links use the canonical room address
   assert.match(html,/href="https:\/\/www.douyu.com\/12157371"/)
   assert.match(html,/<span class="room">88891<\/span>/)
 })
+test('groups include nonfavorites while the standalone favorites tab still excludes them',()=>{
+  const {data}=modules(),rooms=[base(),{...base(),id:'plain-live'},{...base(),id:'plain-off',live:false},{...base(),id:'outside'}]
+  const options={now,filter:'favorites',favorites:['room-1'],group:'户外',groups:{'room-1':'户外','plain-live':'户外','plain-off':'户外'}}
+  const ids=extra=>Array.from(data.selectCardRooms(rooms,{...options,...extra}),room=>room.id)
+  assert.deepEqual(ids({}),['room-1','plain-live','plain-off'])
+  assert.deepEqual(ids({coverMode:true}),['room-1','plain-live'])
+  assert.deepEqual(ids({group:'all'}),['room-1'])
+  assert.deepEqual(ids({favorites:[]}),['plain-live','room-1','plain-off'])
+  assert.equal(ids({matches:room=>room.id==='plain-off'})[0],'plain-off')
+})
